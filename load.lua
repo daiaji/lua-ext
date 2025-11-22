@@ -25,6 +25,9 @@ state has the following:
 
 local stateForEnv = {}
 
+local detect_lfs = require 'ext.detect_lfs'
+local lfs = detect_lfs()
+
 return function(env)
 	env = env or _G
 
@@ -40,7 +43,7 @@ return function(env)
 	-- package.searchpath is missing in 5.1 (but not luajit) ... I need a package.searchpath
 	-- Put in its own file?  does anyone else need this?  or not since it pairs with my require-override, which is in this file too.
 	local searchpath = package.searchpath
-	if not searchpath then
+	if not searchpath or (jit and jit.os == 'Windows') then
 		function searchpath(name, path, sep, rep)
 			sep = sep or ';'
 			rep = rep or '/'	-- or \ for windows ... TODO meh?
@@ -62,6 +65,7 @@ return function(env)
 			end
 			return nil, table.concat(attempted)
 		end
+		package.searchpath = searchpath
 	end
 
 	state.xforms = setmetatable({}, {__index=table})
@@ -119,12 +123,16 @@ return function(env)
 		local data, err
 		if filename then
 			local f
-			f, err = io.open(filename, 'rb')
+			if lfs and lfs.fopen then
+				f, err = lfs.fopen(filename, 'rb')
+			else
+				f, err = io.open(filename, 'rb')
+			end
 			if not f then return nil, err end
-			data, err = f:read'*a'
+			data, err = f:read('*a')
 			f:close()
 		else
-			data, err = io.read'*a'
+			data, err = io.read('*a')
 		end
 		if err then return nil, err end
 

@@ -161,4 +161,57 @@ end
 
 -- TODO other encoders?
 
+-- [Modified] Added dedent from patches
+function string.dedent(s)
+    local lines = string.split(s, '\n')
+    local min_indent = math.huge
+    local has_content = false
+    
+    for _, l in ipairs(lines) do
+        if string.trim(l) ~= "" then
+            local _, _, space = l:find("^(%s*)")
+            min_indent = math.min(min_indent, #space)
+            has_content = true
+        end
+    end
+    
+    if not has_content or min_indent == 0 then return s end
+    
+    local res = table()
+    for _, l in ipairs(lines) do
+        if #l >= min_indent then
+            res:insert(l:sub(min_indent + 1))
+        else
+            res:insert(l)
+        end
+    end
+    return res:concat('\n')
+end
+
+-- [Modified] Added wrap from patches
+function string.wrap(s, width)
+    width = width or 70
+    local lines = {}
+    local current_line = {}
+    local current_len = 0
+
+    for word in s:gmatch("%S+") do
+        local word_len = #word
+        if current_len + word_len + #current_line > width and current_len > 0 then
+            table.insert(lines, table.concat(current_line, " "))
+            current_line = {word}
+            current_len = word_len
+        else
+            table.insert(current_line, word)
+            current_len = current_len + word_len
+        end
+    end
+    
+    if #current_line > 0 then
+        table.insert(lines, table.concat(current_line, " "))
+    end
+    
+    return table.concat(lines, "\n") .. "\n"
+end
+
 return string

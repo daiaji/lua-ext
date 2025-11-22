@@ -30,4 +30,29 @@ return function(env)
 	for k,v in pairs(env.assert) do
 		env['assert'..k] = v
 	end
+
+	-- [Modified] Boost modules integration
+	env.Iter       = require 'ext.iter'
+	env.Set        = require 'ext.set'
+	env.OrderedMap = require 'ext.ordered_map'
+	env.MultiMap   = require 'ext.multimap'
+	env.Array2D    = require 'ext.array2d'
+	env.Date       = require 'ext.date'
+
+	-- Functional programming shortcuts
+	local func     = require 'ext.func'
+	env.func       = func
+	env._1         = func._1
+	env._2         = func._2
+	env._3         = func._3
+	env._4         = func._4
+	env._5         = func._5
+	env.P          = func.P
+
+	-- Utilities
+	env.csv        = require 'ext.csv'
+	env.xml        = require 'ext.xml'
+	env.config     = require 'ext.config'
+	env.template   = require 'ext.template'
+	env.cli        = require 'ext.cli'
 end

@@ -3,6 +3,9 @@ for k,v in pairs(require 'table') do table[k] = v end
 
 table.__index = table
 
+-- [Modified] Lazy require Iter to avoid circular dependency (iter requires table)
+-- local Iter = require 'ext.iter' 
+
 function table.new(...)
 	return setmetatable({}, table):union(...)
 end
@@ -24,7 +27,8 @@ local origTableUnpack = table.unpack
 function table.unpack(...)
 	local nargs = select('#', ...)
 	local t, i, j = ...
-	if nargs < 3 and t.n ~= nil then
+	-- [Modified] Added check for table type to avoid crash on nil.n
+	if nargs < 3 and type(t) == 'table' and t.n ~= nil then
 		return origTableUnpack(t, i or 1, t.n)
 	end
 	return origTableUnpack(...)
@@ -63,7 +67,8 @@ end
 function table:union(...)
 	for i=1,select('#', ...) do
 		local o = select(i, ...)
-		if o then
+		-- [Fix] Check if o is actually a table before iterating
+		if o and type(o) == 'table' then
 			for k,v in pairs(o) do
 				self[k] = v
 			end
@@ -79,7 +84,7 @@ end
 function table:append(...)
 	for i=1,select('#', ...) do
 		local u = select(i, ...)
-		if u then
+		if u and type(u) == 'table' then
 			for _,v in ipairs(u) do
 				table.insert(self, v)
 			end
@@ -180,6 +185,12 @@ function table:find(value, eq)
 			if v == value then return k, v end
 		end
 	end
+end
+
+-- [Fix] Added contains method required by tests
+function table:contains(value, eq)
+    -- [Fix] Use table.find instead of self:find to support plain tables
+    return table.find(self, value, eq) ~= nil
 end
 
 function table:findi(value, eq)
@@ -401,5 +412,35 @@ end
 
 -- if you use this as a member method then know that you can't use it a second time (unless the metatable you set it to has a __index that has 'setmetatable' defined)
 table.setmetatable = setmetatable
+
+-- [Modified] Added iter method from patches
+function table:iter()
+    -- Lazy require here to break circular dependency (table -> iter -> table)
+    local Iter = require 'ext.iter'
+    local i = 0
+    local n = #self
+    return Iter(function()
+        i = i + 1
+        if i <= n then return self[i] end
+    end)
+end
+
+-- [Modified] Added zip method from patches
+function table.zip(...)
+    local args = table.pack(...)
+    local res = table()
+    local len = math.huge
+    for i = 1, args.n do
+        len = math.min(len, #args[i])
+    end
+    for i = 1, len do
+        local row = table()
+        for j = 1, args.n do
+            row:insert(args[j][i])
+        end
+        res:insert(row)
+    end
+    return res
+end
 
 return table

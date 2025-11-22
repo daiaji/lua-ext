@@ -14,6 +14,9 @@ local assert = require 'ext.assert'
 local detect_lfs = require 'ext.detect_lfs'
 local detect_os = require 'ext.detect_os'
 
+-- [Modified] Require lfs_ffi for enhanced file operations
+local lfs = require 'lfs_ffi'
+
 os.sep = detect_os() and '\\' or '/'
 
 -- TODO this vs path.fixpathsep ...
@@ -46,31 +49,41 @@ function os.exec(cmd)
 	return os.execute(cmd)
 end
 
--- TODO should this fail if the dir already exists?  or should it succeed?
--- should it fail if a file is presently there? probably.
--- should makeParents be set by default?  it's on by default in Windows.
-function os.mkdir(dir, makeParents)
+-- [Modified] Override os.remove to use FFI version if available (supports Unicode on Windows)
+local orig_remove = os.remove
+function os.remove(path)
+	if lfs.remove_file then
+		if lfs.remove_file(path) then return true end
+		return nil, "remove failed"
+	else
+		return orig_remove(path)
+	end
+end
+
+function os.fileexists(fn)
+	assert(fn, "expected filename")
 	local lfs = detect_lfs()
 	if lfs then
-		if not makeParents then
-			-- no parents - just mkdir
-			return lfs.mkdir(dir)
+		return lfs.attributes(fn) ~= nil
+	else
+		if detect_os() then
+			-- Windows reports 'false' to io.open for directories, so I can't use that ...
+			return 'yes' == string.trim(io.readproc('if exist "'..os.path(fn)..'" (echo yes) else (echo no)'))
 		else
-			-- if then split up path into /'s and make sure each part exists or make it
-			local parts = string.split(dir, '/')
-			for i=(parts[1] == '' and 2 or 1),#parts do
-				local parent = parts:sub(1, i):concat'/'
-				if not os.fileexists(parent) then
-					local results = table.pack(lfs.mkdir(parent))
-					if not results[1] then return results:unpack() end
-				else
-					-- TODO if it exists and it's not a dir then we're going to be in trouble.
-					-- what does shell mkdir -p do in that case?
-				end
-			end
+			-- here's a version that works for OSX ...
+			local f, err = io.open(fn, 'r')
+			if not f then return false, err end
+			f:close()
 			return true
 		end
-	else
+	end
+end
+
+-- [FIX] Robust Recursive mkdir implementation (Stack-based unwinding)
+-- Replaces the old string.split implementation which failed on Windows drive roots
+function os.mkdir(dir, makeParents)
+	local lfs = detect_lfs()
+	if not lfs then
 		-- fallback on shell
 		local tonull
 		if detect_os() then
@@ -83,6 +96,54 @@ function os.mkdir(dir, makeParents)
 		local cmd = 'mkdir'..(makeParents and ' -p' or '')..' '..('%q'):format(dir)..tonull
 		return os.execute(cmd)
 	end
+
+	-- Normalize path separators for internal processing
+	dir = os.path(dir)
+
+	if not makeParents then
+		-- no parents - just mkdir
+		return lfs.mkdir(dir)
+	end
+
+	-- Check if target already exists
+	if os.fileexists(dir) then return true end
+
+	-- Stack-based parent finding
+	local stack = {}
+	local p = dir
+	while true do
+		table.insert(stack, 1, p)
+		
+		-- Find parent directory
+		-- Match both / and \ separators to handle various path formats
+		local new_p = p:match("^(.*)[\\/][^\\/]+$")
+		
+		if not new_p then
+			-- Reached root or no separator found
+			-- If it looks like a drive root (C: or C:\), ensure we don't try to mkdir it
+			if p:match("^%a:$") or p:match("^%a:[\\/]$") then
+				table.remove(stack, 1)
+			end
+			break 
+		end
+		
+		if os.fileexists(new_p) then
+			break
+		end
+		p = new_p
+	end
+
+	-- Create missing directories in order
+	for _, folder in ipairs(stack) do
+		if not os.fileexists(folder) then
+			local res, err = lfs.mkdir(folder)
+			-- Double check existence to handle race conditions or "already exists" errors gracefully
+			if not res and not os.fileexists(folder) then
+				return nil, "mkdir failed for '"..folder.."': " .. tostring(err)
+			end
+		end
+	end
+	return true
 end
 
 function os.rmdir(dir)
@@ -97,10 +158,62 @@ function os.rmdir(dir)
 	end
 end
 
+-- [FIX] Generic fallback for os.copy (stream based)
+-- Defined here so it is available even if FFI/Windows block is skipped
+function os.copy(src, dst)
+	local r, err = io.open(src, 'rb')
+	if not r then return nil, err end
+	local w, err2 = io.open(dst, 'wb')
+	if not w then r:close(); return nil, err2 end
+	
+	local chunk_size = 64*1024 -- 64KB chunks
+	while true do
+		local d = r:read(chunk_size)
+		if not d then break end
+		w:write(d)
+	end
+	
+	r:close()
+	w:close()
+	return true
+end
+
 function os.move(from, to)
-	-- WHY isn't this a part of luafilesystem?  https://lunarmodules.github.io/luafilesystem/manual.html
+    -- [FIX] Ensure arguments are strings, handling Path objects
+    from = tostring(from)
+    to = tostring(to)
+
+	-- 1. Try lfs_ffi first (if it implements rename_file)
+	if lfs.rename_file then
+		if lfs.rename_file(from, to) then return true end
+	end
+
+	-- 2. Preferred Windows FFI Implementation (MoveFileExW)
+	-- This supports cross-volume moves and atomic replacement
 	local detect_ffi = require 'ext.detect_ffi'
 	local ffi = detect_ffi()
+	if ffi and ffi.os == 'Windows' then
+		local kernel32 = require 'ffi.req' 'Windows.sdk.kernel32'
+		local CP_UTF8 = 65001
+		
+		-- Define helper locally to avoid dependency on external scope
+		local function to_wide(str)
+			if not str then return nil end
+			local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
+			local buf = ffi.new("wchar_t[?]", len)
+			kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
+			return buf
+		end
+		
+		-- MOVEFILE_COPY_ALLOWED (2) | MOVEFILE_REPLACE_EXISTING (1) = 3
+		local flags = 3 
+		if kernel32.MoveFileExW(to_wide(from), to_wide(to), flags) ~= 0 then
+			return true
+		else
+			-- Fallthrough to legacy methods if MoveFileExW fails
+		end
+	end
+
 	if ffi then
 		-- if we have ffi then we can use <stdio.h> rename()
 		local stdio = require 'ffi.req' 'c.stdio'
@@ -116,9 +229,13 @@ function os.move(from, to)
 		return os.execute(cmd)
 		--]]
 		--[[ worst case, rewrite it.
-		local d = path(from):read()
-		path(from):remove()	-- remove first in case to and from match
-		path(to):write(d)
+		-- use the generic os.copy defined above
+		local res, err = os.copy(from, to)
+		if res then 
+			os.remove(from) 
+			return true
+		end
+		return nil, err
 		--]]
 	end
 end
@@ -281,6 +398,162 @@ function os.home()
 	local home = os.getenv'HOME' or os.getenv'USERPROFILE'
 	if not home then return false, "failed to find environment variable HOME or USERPROFILE" end
 	return home
+end
+
+local ffi = require 'ffi'
+if ffi.os == 'Windows' then
+	local kernel32 = require 'ffi.req' 'Windows.sdk.kernel32'
+	-- corecrt_wstdlib for _wgetenv, _wputenv
+	require 'ffi.req' 'c.corecrt_wstdlib'
+	-- process for _wsystem
+	require 'ffi.req' 'c.process'
+	-- [Added] user32 for MsgWaitForMultipleObjects
+	local user32 = require 'ffi.req' 'Windows.sdk.user32'
+
+	local C = ffi.C
+	local CP_UTF8 = 65001
+
+	-- Helper: UTF-8 string -> WCHAR*
+	local function to_wide(str)
+		if not str then return nil end
+		local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
+		if len == 0 then return nil end
+		local buf = ffi.new("wchar_t[?]", len)
+		kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
+		return buf
+	end
+
+	-- Helper: WCHAR* -> UTF-8 string
+	local function from_wide(wstr)
+		if wstr == nil then return nil end
+		local len = kernel32.WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nil, 0, nil, nil)
+		if len == 0 then return nil end
+		local buf = ffi.new("char[?]", len)
+		kernel32.WideCharToMultiByte(CP_UTF8, 0, wstr, -1, buf, len, nil, nil)
+		return ffi.string(buf)
+	end
+
+	-- Override os.execute to support unicode commands
+	function os.execute(cmd)
+		if not cmd then
+			-- check shell availability
+			return C._wsystem(nil) ~= 0
+		end
+
+		local wcmd = to_wide(cmd)
+		local status = C._wsystem(wcmd)
+
+		-- Simulate Lua 5.2+ return format
+		if status == -1 then
+			return nil, "execution failed", -1
+		end
+		return (status == 0), "exit", status
+	end
+
+	-- Override os.getenv to support unicode environment variables
+	function os.getenv(varname)
+		local wvar = to_wide(varname)
+		local wval = C._wgetenv(wvar)
+		return from_wide(wval)
+	end
+
+	-- Override os.setenv (not standard lua, but good to have)
+	function os.setenv(varname, value)
+		-- [Fix] Use _wputenv_s instead of _wputenv to prevent use-after-free.
+		-- _wputenv_s creates a copy of the string in the environment block.
+		-- _wputenv expects the pointer to remain valid (but our ffi.new'd pointer will be GC'd).
+		local wvar = to_wide(varname)
+		local wval = value and to_wide(value) or to_wide("") -- Empty string removes variable in _wputenv_s
+		
+		return C._wputenv_s(wvar, wval) == 0
+	end
+
+	-- Helper to convert UTF-8 path to ANSI (CP_ACP)
+	-- Useful for passing paths to legacy DLLs that don't support Unicode
+	function os.toansi(str)
+		if not str then return nil end
+		local wstr = to_wide(str)
+		if not wstr then return nil end
+		
+		local CP_ACP = 0
+		local len = kernel32.WideCharToMultiByte(CP_ACP, 0, wstr, -1, nil, 0, nil, nil)
+		if len == 0 then return nil end
+		local buf = ffi.new("char[?]", len)
+		kernel32.WideCharToMultiByte(CP_ACP, 0, wstr, -1, buf, len, nil, nil)
+		return ffi.string(buf)
+	end
+
+	-- Helper to get the 8.3 short path (ASCII)
+	-- Useful for legacy DLLs, but requires file to exist
+	function os.shortpath(path)
+		local wpath = to_wide(path)
+		if not wpath then return path end
+		
+		local len = kernel32.GetShortPathNameW(wpath, nil, 0)
+		if len == 0 then return path end
+		
+		local buf = ffi.new("wchar_t[?]", len)
+		kernel32.GetShortPathNameW(wpath, buf, len)
+		return from_wide(buf)
+	end
+
+	-- Override os.tmpname to support unicode paths
+	function os.tmpname()
+		local MAX_PATH = 261
+		local buf = ffi.new("wchar_t[?]", MAX_PATH)
+		local len = kernel32.GetTempPathW(MAX_PATH, buf)
+		if len == 0 then return nil end
+		
+		local filename_buf = ffi.new("wchar_t[?]", MAX_PATH)
+		if kernel32.GetTempFileNameW(buf, to_wide("lua"), 0, filename_buf) == 0 then
+			return nil
+		end
+		return from_wide(filename_buf)
+	end
+
+	-- [Added] Non-blocking Sleep (Message Pump) for GUI responsiveness
+	function os.sleep_pump(ms)
+		local start = kernel32.GetTickCount()
+		local elapsed = 0
+		local QS_ALLINPUT = 0x04FF
+		local PM_REMOVE = 1
+		local msg = ffi.new("MSG")
+
+		while elapsed < ms do
+			local remaining = ms - elapsed
+			-- Wait for message or timeout
+			local res = user32.MsgWaitForMultipleObjects(0, nil, 0, remaining, QS_ALLINPUT)
+			
+			if res == 0 then -- WAIT_OBJECT_0
+				-- Pump messages
+				while user32.PeekMessageW(msg, nil, 0, 0, PM_REMOVE) ~= 0 do
+					if msg.message == 0x0012 then -- WM_QUIT
+						user32.PostQuitMessage(msg.wParam)
+						return -- Stop sleeping immediately
+					end
+					user32.TranslateMessage(msg)
+					user32.DispatchMessageW(msg)
+				end
+			end
+			elapsed = kernel32.GetTickCount() - start
+		end
+	end
+
+	-- [Added] Standardized File Copy (Unicode aware)
+	-- This OVERWRITES the generic one defined above
+	function os.copy(src, dst, fail_if_exists)
+        -- [FIX] Ensure arguments are strings (handles Path objects)
+        src = tostring(src)
+        dst = tostring(dst)
+        
+		local wsrc = to_wide(src)
+		local wdst = to_wide(dst)
+		if kernel32.CopyFileW(wsrc, wdst, fail_if_exists and 1 or 0) ~= 0 then
+			return true
+		else
+			return false, "CopyFileW failed: " .. tostring(kernel32.GetLastError())
+		end
+	end
 end
 
 return os

@@ -86,18 +86,18 @@ local functionMeta = {
 			return function(...)
 				return f(...)[k]
 			end
-		end,
+		end
 		-- takes a function that returns an object
 		--  returns a function that applies that object's __newindex to the key and value arguments
 		-- so if t={} and f()==t then f:assign('a',1)() assigns t.a==1
-		assign = function(f, k, v)
+		,assign = function(f, k, v)
 			return function(...)
 				f(...)[k] = v
 			end
-		end,
+		end
 
 		-- f:compose(g1, ...) returns a function that evaluates to f(g1(...(gn(args))))
-		compose = function(...)
+		,compose = function(...)
 			local funcs = table.pack(...)
 			for i=1,funcs.n do
 				assert.type(funcs[i], 'function')
@@ -109,10 +109,10 @@ local functionMeta = {
 				end
 				return table.unpack(args,1,args.n)
 			end
-		end,
+		end
 
 		-- f:compose_n(n, g) returns a function that evaluates to f(arg[1], ... arg[j-1], g(arg[j]), arg[j+1], ..., arg[n])
-		compose_n = function(f, n, ...)
+		,compose_n = function(f, n, ...)
 			local funcs = table.pack(...)
 			return function(...)
 				local args = table.pack(...)
@@ -128,40 +128,74 @@ local functionMeta = {
 
 				return f(table.unpack(args, 1, args.n))
 			end
-		end,
+		end
 
 		-- bind / partial apply -- currying first args, and allowing vararg rest of args
-		bind = function(f, ...)
-			local args = table.pack(...)
+		-- [Fix] Rewritten to correctly handle nil values and argument counts
+		,bind = function(f, ...)
+			local bound_args = table.pack(...)
 			return function(...)
-				local n = args.n
-				local callargs = {table.unpack(args, 1, n)}
-				for i=1,select('#', ...) do
-					n=n+1
-					callargs[n] = select(i, ...)
+				local call_args = table.pack(...)
+				local final_args = {}
+				local len = 0
+				
+				-- Append bound args first
+				for i=1, bound_args.n do
+					len = len + 1
+					final_args[len] = bound_args[i]
 				end
-				return f(table.unpack(callargs, 1, n))
+				
+				-- Append call args
+				for i=1, call_args.n do
+					len = len + 1
+					final_args[len] = call_args[i]
+				end
+				
+				return f(table.unpack(final_args, 1, len))
 			end
-		end,
+		end
 
 		-- bind argument n, n+1, n+2, ... to the values provided
-		bind_n = function(f, n, ...)
-			local nargs = table.pack(...)
+		-- [Fix] Rewritten to correctly handle insertion and shifting
+		,bind_n = function(f, start_index, ...)
+			local bound_args = table.pack(...)
 			return function(...)
-				local args = table.pack(...)
-				for i=1,nargs.n do
-					args[n+i-1] = nargs[i]
+				local input_args = table.pack(...)
+				local final_args = {}
+				local len = 0
+				
+				-- 1. Args before insertion point
+				for i=1, start_index-1 do
+					len = len + 1
+					if i <= input_args.n then
+						final_args[len] = input_args[i]
+					else
+						-- Pad with nil if input args are shorter than start_index
+						final_args[len] = nil
+					end
 				end
-				args.n = math.max(args.n, n+nargs.n-1)
-				return f(table.unpack(args, 1, args.n))
+				
+				-- 2. Bound args
+				for i=1, bound_args.n do
+					len = len + 1
+					final_args[len] = bound_args[i]
+				end
+				
+				-- 3. Remaining input args
+				for i=start_index, input_args.n do
+					len = len + 1
+					final_args[len] = input_args[i]
+				end
+				
+				return f(table.unpack(final_args, 1, len))
 			end
-		end,
+		end
 
 		-- Takes a function and a number of arguments,
 		-- returns a function that applies them individually,
 		-- first to the function, then to each function returned
 		-- (a1 -> (a2 -> ... (an -> b))) -> (a1, a2, ..., an -> b)
-		uncurry = function(f, n)
+		,uncurry = function(f, n)
 			return function(...)
 				local s = f
 				for i=1,n do
@@ -169,9 +203,9 @@ local functionMeta = {
 				end
 				return s
 			end
-		end,
+		end
 		-- grows/shrinks the number of args passed.  pads with nil.
-		nargs = function(f, n)
+		,nargs = function(f, n)
 			return function(...)
 				local t = {}
 				for i=1,n do
@@ -179,17 +213,17 @@ local functionMeta = {
 				end
 				return f(table.unpack(t, 1, n))
 			end
-		end,
+		end
 		-- swaps the next two arguments
-		swap = function(f)
+		,swap = function(f)
 			return function(a, b, ...)
 				return f(b, a, ...)
 			end
-		end,
-		dump = string.dump,
+		end
+		,dump = string.dump
 		-- coroutine access
-		wrap = coroutine.wrap,
-		co = coroutine.create,
+		,wrap = coroutine.wrap
+		,co = coroutine.create
 	}
 	--]]
 }

@@ -87,6 +87,10 @@ number.tostring = function(t, base, maxdigits)
 			if i < 1 then
 				if not dot then
 					dot = true
+					-- [Fix] Ensure leading zero for fractions (e.g., 0.1 instead of .1)
+					if #s == 0 or (#s == 1 and s[1] == '-') then
+						table.insert(s, '0')
+					end
 					table.insert(s, '.')
 					if i < 0 then
 						table.insert(s, ('0'):rep(-i))

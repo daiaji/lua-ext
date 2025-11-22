@@ -1,0 +1,7 @@
+[submodule "vendor/lua-ffi-bindings"]
+	path = vendor/lua-ffi-bindings
+	url = https://github.com/daiaji/lua-ffi-bindings.git
+	branch = main
+[submodule "vendor/luajit2"]
+	path = vendor/luajit
+	url = https://github.com/openresty/luajit2.git
