@@ -396,13 +396,16 @@ end
 
 local ffi = require 'ffi'
 if ffi.os == 'Windows' then
-    -- [FIX] Use safe requires for FFI bindings
+    -- [FIX] Define CDEF for CRT functions we need, to be robust against missing ffi.req
+    ffi.cdef[[
+        int _wputenv_s(const wchar_t *name, const wchar_t *value);
+        int _wsystem(const wchar_t *command);
+    ]]
+
     local ok_k32, kernel32 = pcall(require, 'ffi.req', 'Windows.sdk.kernel32')
-    local ok_std, _ = pcall(require, 'ffi.req', 'c.corecrt_wstdlib')
-    local ok_proc, _ = pcall(require, 'ffi.req', 'c.process')
     local ok_usr, user32 = pcall(require, 'ffi.req', 'Windows.sdk.user32')
 
-    if ok_k32 and ok_std and ok_proc then
+    if ok_k32 then
         local C = ffi.C
         local CP_UTF8 = 65001
 

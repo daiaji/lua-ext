@@ -4,6 +4,9 @@ for k, v in pairs(require 'io') do io[k] = v end
 -- [Modified] Use lfs_ffi for Unicode support on Windows (and Linux consistency)
 local has_lfs, lfs = pcall(require, 'lfs_ffi')
 
+-- [FIX] Ensure io.wopen is always defined to avoid crashes in path.lua
+io.wopen = io.open
+
 -- [Added] Helper: Windows encoding conversion logic
 local win_convert = nil
 local ffi = require 'ffi'
@@ -62,19 +65,23 @@ function io.readfile(fn, options)
         local encoding = options.encoding or 'auto'
         local content = d
         
+        -- [FIX] Robust BOM check independent of Windows APIs
+        local ptr = ffi.cast("const uint8_t*", d)
+        local has_bom = (len >= 3 and ptr[0]==0xEF and ptr[1]==0xBB and ptr[2]==0xBF)
+        
+        if encoding == 'auto' and has_bom then
+            -- Strip UTF-8 BOM
+            content = ffi.string(ptr + 3, len - 3)
+            return content
+        end
+
         if win_convert then
-            local ptr = ffi.cast("const uint8_t*", d)
-            
             if encoding == 'auto' then
-                if len >= 3 and ptr[0]==0xEF and ptr[1]==0xBB and ptr[2]==0xBF then
-                    -- UTF-8 BOM
-                    content = ffi.string(ptr + 3, len - 3)
-                elseif len >= 2 and ptr[0]==0xFF and ptr[1]==0xFE then
+                if len >= 2 and ptr[0]==0xFF and ptr[1]==0xFE then
                     -- UTF-16 LE
                     content = win_convert.w2u(ffi.cast("const wchar_t*", ptr + 2), (len - 2) / 2)
                 else
-                    -- Assume ANSI
-                    content = win_convert.a2u(ffi.cast("const char*", ptr), len)
+                    -- ANSI/UTF-8 Mixed? Leave as is for auto unless explicit
                 end
             elseif encoding == 'utf16' then
                 content = win_convert.w2u(ffi.cast("const wchar_t*", ptr), len / 2)
@@ -83,7 +90,7 @@ function io.readfile(fn, options)
             end
             
             -- Normalize line endings
-            if content then
+            if content and content ~= d then
                 content = content:gsub("\r\n", "\n")
             end
             return content
