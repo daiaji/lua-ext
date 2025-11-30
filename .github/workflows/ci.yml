@@ -52,6 +52,12 @@ jobs:
       - name: Assemble Test Environment
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          
+          # Debug: List root files
+          Write-Host "Listing repository root:"
+          Get-ChildItem -Path . | Select-Object Name
+          
           # Create clean stage directory
           $stage = New-Item -ItemType Directory -Path "stage" -Force
           $bin   = New-Item -ItemType Directory -Path "$stage/bin"
@@ -68,7 +74,7 @@ jobs:
           if (Test-Path "vendor/lua-ffi-bindings") {
              Copy-Item "vendor/lua-ffi-bindings/*" $ffiDest -Recurse -Exclude ".git"
           } else {
-             Write-Warning "vendor/lua-ffi-bindings not found in submodule."
+             Write-Warning "vendor/lua-ffi-bindings not found."
           }
 
           # B. luafilesystem
@@ -88,38 +94,28 @@ jobs:
           Copy-Item "${{ env.LUAJIT_BIN_DIR }}\jit" "$lua/jit" -Recurse
 
           # 3. Target Library (lua-ext)
-          # Structure:
-          #   stage/lua/ext.lua
-          #   stage/lua/ext/*.lua (assert.lua, table.lua, etc)
-          
           $extDir = New-Item -ItemType Directory -Path "$lua/ext" -Force
           
           # Copy all .lua files from root to stage/lua/ext/
-          # [FIX] Use explicit file copy loop to ensure flattened structure from root
-          Get-ChildItem -Path . -Filter "*.lua" -Exclude "setup.lua" | ForEach-Object {
-              Copy-Item -Path $_.FullName -Destination $extDir
-          }
+          # Using Copy-Item directly with wildcard
+          Copy-Item ".\*.lua" -Destination $extDir -Force
           
-          # Handle 'ext.lua' specially: It needs to be at stage/lua/ext.lua
-          # Wait, per rockspec logic:
-          #   rockspec installs 'ext/ext.lua' (repo root) into 'ext.lua' (lua path root)
-          #   and 'ext/everything_else.lua' into 'ext/everything_else.lua'
-          
-          # So we need to move `stage/lua/ext/ext.lua` to `stage/lua/ext.lua`
-          $srcExtLua = Join-Path $extDir "ext.lua"
-          $dstExtLua = Join-Path $lua "ext.lua"
-          
-          if (Test-Path $srcExtLua) {
-              Move-Item -Path $srcExtLua -Destination $dstExtLua -Force
-          } else {
-              Write-Error "CRITICAL: ext.lua not found in $extDir. List follows:"
-              Get-ChildItem $extDir
+          # Verify copy happened
+          if (-not (Test-Path "$extDir\ext.lua")) {
+              Write-Error "Failed to copy ext.lua to $extDir. Is the repo structure flat?"
               exit 1
           }
+          
+          # Move ext.lua to stage/lua/ext.lua so "require 'ext'" works
+          $srcExtLua = Join-Path $extDir "ext.lua"
+          $dstExtLua = Join-Path $lua "ext.lua"
+          Move-Item -Path $srcExtLua -Destination $dstExtLua -Force
 
           # 4. Tests
           if (Test-Path "tests") {
-              Copy-Item "tests/*" $tests -Recurse
+              Copy-Item "tests\*" $tests -Recurse -Force
+          } else {
+              Write-Warning "tests directory not found in root"
           }
 
           # Save Path
