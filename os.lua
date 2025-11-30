@@ -410,7 +410,6 @@ if ffi.os == 'Windows' then
         local function to_wide(str)
             if not str then return nil end
             local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
-            if len == 0 then return nil end
             local buf = ffi.new("wchar_t[?]", len)
             kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
             return buf
@@ -536,6 +535,78 @@ if ffi.os == 'Windows' then
             else
                 return false, "CopyFileW failed: " .. tostring(kernel32.GetLastError())
             end
+        end
+
+        -- [Added] Windows-specific Directory Functions (Unicode aware)
+        function os.fileexists(path)
+            local wpath = to_wide(tostring(path))
+            local attr = kernel32.GetFileAttributesW(wpath)
+            return attr ~= 0xFFFFFFFF
+        end
+
+        function os.isdir(path)
+            local wpath = to_wide(tostring(path))
+            local attr = kernel32.GetFileAttributesW(wpath)
+            if attr == 0xFFFFFFFF then return false end
+            local FILE_ATTRIBUTE_DIRECTORY = 0x10
+            return bit.band(attr, FILE_ATTRIBUTE_DIRECTORY) ~= 0
+        end
+
+        -- Native recursion-aware mkdir
+        function os.mkdir(dir, makeParents)
+            dir = tostring(dir)
+            local wdir = to_wide(dir)
+            
+            -- Simple case
+            if not makeParents then
+                return kernel32.CreateDirectoryW(wdir, nil) ~= 0
+            end
+
+            -- Recursive case
+            if os.fileexists(dir) then return true end
+
+            -- Re-implement recursion with native checks
+            local stack = {}
+            local p = dir
+            while true do
+                table.insert(stack, 1, p)
+                local new_p = p:match("^(.*)[\\/][^\\/]+$")
+                if not new_p then
+                    if p:match("^%a:$") or p:match("^%a:[\\/]$") then
+                        table.remove(stack, 1)
+                    end
+                    break 
+                end
+                if os.fileexists(new_p) then break end
+                p = new_p
+            end
+
+            for _, folder in ipairs(stack) do
+                if not os.fileexists(folder) then
+                    if kernel32.CreateDirectoryW(to_wide(folder), nil) == 0 then
+                        -- Double check if it appeared (race condition)
+                        if not os.fileexists(folder) then
+                            return nil, "mkdir failed: " .. tostring(kernel32.GetLastError())
+                        end
+                    end
+                end
+            end
+            return true
+        end
+
+        function os.rmdir(dir)
+            dir = tostring(dir)
+            local wdir = to_wide(dir)
+            return kernel32.RemoveDirectoryW(wdir) ~= 0
+        end
+
+        function os.remove(path)
+            path = tostring(path)
+            if os.isdir(path) then
+                return os.rmdir(path)
+            end
+            local wpath = to_wide(path)
+            return kernel32.DeleteFileW(wpath) ~= 0
         end
     end
 end

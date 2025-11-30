@@ -14,9 +14,15 @@ if ok_int then
         if not x then return nil end
         -- Check if fractional
         if x % 1 ~= 0 then return nil end
-        -- Check range (double can represent exact integers up to 2^53)
-        -- But Lua 5.3 allows wrapping? No, tointeger returns nil if not representable.
-        -- Actually tointeger casts to integer if representable.
+        
+        -- [FIX] Optimization: If it fits in standard Lua number (double, 53 bits), return that.
+        -- This ensures compatibility with standard Lua tests that expect 'number' type 
+        -- and avoids unnecessary cdata usage for common small integers.
+        if x >= -9007199254740992 and x <= 9007199254740992 then
+             return x
+        end
+
+        -- Check range for 64-bit int
         if x > tonumber(math.maxinteger) or x < tonumber(math.mininteger) then
             return nil
         end
@@ -25,8 +31,7 @@ if ok_int then
     
     function math.type(x)
         if type(x) == 'number' then
-            -- Plain Lua number is usually double in LuaJIT (unless mapped to int64 by FFI logic, but type() returns 'cdata' for int64)
-            -- Wait, type(1LL) is 'cdata' in LuaJIT.
+            -- Plain Lua number is usually double in LuaJIT
             return 'float' 
         elseif type(x) == 'cdata' then
             if ffi.istype("int64_t", x) or ffi.istype("uint64_t", x) then

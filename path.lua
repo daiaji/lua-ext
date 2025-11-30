@@ -142,8 +142,8 @@ local mappings = {
 		rmdir = 'rmdir',
 		copy = 'copy',      -- [FIX] Added copy mapping
 		--move = 'move',	-- defined later for picking out path from arg
-		-- exists = 'fileexists', -- Replaced by explicit implementation below
-		-- isdir = 'isdir', -- Replaced by explicit implementation below
+		exists = 'fileexists', -- [FIX] Use os.fileexists as it is now Unicode/Windows aware
+		isdir = 'isdir', -- [FIX] Use os.isdir as it is now Unicode/Windows aware
 		--dir = 'listdir',		-- wrapping in path
 		--rdir = 'rlistdir',
 
@@ -203,15 +203,15 @@ end
 -- [[ Attributes & Predicates (New Implementation Features)
 
 local function get_mode(p)
-	if not lfs then return nil end
-	-- [FIX] Also use tostring(p) here for consistency
-	return lfs.attributes(tostring(p), 'mode')
+	-- [FIX] Delegate to os.isdir instead of raw LFS to benefit from Unicode fixes
+	if os.isdir(tostring(p)) then return 'directory' end
+	if os.fileexists(tostring(p)) then return 'file' end
+	return nil
 end
 
 function Path:exists()
-	if not lfs then return false end
-	-- [FIX] Use tostring(self) for attributes check
-	return lfs.attributes(tostring(self)) ~= nil
+	-- [FIX] Delegate to os.fileexists
+	return os.fileexists(tostring(self))
 end
 
 function Path:is_file()
