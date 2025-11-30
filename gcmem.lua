@@ -1,15 +1,11 @@
 local ffi = require 'ffi'
-require 'ffi.req' 'c.stdlib'
+-- [FIX] Removed dependency on 'c.stdlib' as we now use ffi.new
+-- require 'ffi.req' 'c.stdlib'
 
 --[[
-uses C malloc paired with ffi-based garbage collection
-typecasts correctly
-and retains the ability to manually free
-(so you don't have to manually free it)
-NOTICE casting *AFTER* wrapping will crash, probably due to the gc thinking the old pointer is gone
-also ffi.gc retains type, so no worries about casting before
-...
-that was true, but now it's always losing the ptr and crashing, so I'm going to fall back on ffi.new
+uses C malloc paired with ffi.gc (Old behavior)
+Now uses ffi.new (New behavior) which handles GC automatically.
+Retains API compatibility.
 --]]
 local function gcnew(T, n)
 	--[[
@@ -18,6 +14,7 @@ local function gcnew(T, n)
 	ptr = ffi.gc(ptr, ffi.C.free)
 	--]]
 	-- [Modified] Use ffi.new as recommended by LuaJIT (safer and cleaner)
+	-- This returns a GC-managed cdata object.
 	local ptr = ffi.new(T..'['..n..']')
 	
 	return ptr
@@ -30,16 +27,17 @@ frees the ptr and removes it from the gc
 --]]
 local function gcfree(ptr)
 	-- [Modified] ffi.new allocated objects are managed by GC automatically.
-	-- Calling free on ffi.new pointers is invalid/unnecessary.
-	-- However, to force release of gc-anchored resources:
+	-- Calling free on ffi.new pointers is invalid.
+	-- However, we can untether the GC callback if one existed (though ffi.new usually doesn't have one set via ffi.gc unless manual)
+	-- For ffi.new VLA, we just clear the reference in the caller.
+	
+	-- To force release of resources if this WAS a manually managed pointer (legacy support):
 	ffi.gc(ptr, nil) 
-	if ffi.istype(ptr, ffi.cast("void*", 0)) then
-		-- Only call free if it was malloc'd (heuristic check or strictly for legacy compat)
-		-- For ffi.new, we just let GC handle it after untethering if there was a custom finalizer.
-		-- Since gcnew now uses ffi.new, manual free is fundamentally incompatible.
-		-- We leave this as a no-op for ffi.new objects or explicit free for malloc'd ones if mixed.
-		-- ffi.C.free(ptr) 
-	end
+	
+	-- Note: We cannot safely call ffi.C.free(ptr) here because we don't know 
+	-- if 'ptr' came from ffi.new (GC managed) or ffi.C.malloc.
+	-- Since gcnew now produces ffi.new pointers, calling free is dangerous.
+	-- We assume this function is a no-op for ffi.new objects.
 end
 
 return {

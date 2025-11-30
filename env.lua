@@ -39,6 +39,9 @@ return function(env)
 	env.Array2D    = require 'ext.array2d'
 	env.Date       = require 'ext.date'
 	env.binary     = require 'ext.binary' -- [Added] Binary buffer support
+    
+    -- [Added] UTF-8 Library
+    env.utf8       = require 'ext.utf8'
 
 	-- Functional programming shortcuts
 	local func     = require 'ext.func'

@@ -122,26 +122,41 @@ function io.appendfile(fn, d)
 	end
 end
 
-if has_lfs and lfs.fopen then
-	local original_lines = io.lines
-	function io.lines(filename, ...)
-		if filename == nil then
-			return original_lines(...)
-		end
-		local f, err = lfs.fopen(filename, 'r')
-		if not f then error(err) end
+-- [Modified] Enhanced lines iterator (Lua 5.3 style with args)
+local function lines_iterator(f, ...)
+    local args = {...}
+    local closing = false
+    -- if f is a string, open it
+    if type(f) == 'string' then
+        local err
+        local filename = f
+        if has_lfs and lfs.fopen then
+            f, err = lfs.fopen(filename, 'r')
+        else
+            f, err = io.open(filename, 'r')
+        end
+        if not f then error(err) end
+        closing = true
+    end
+    
+    return function()
+        local res
+        if #args == 0 then
+            res = f:read()
+        else
+            res = f:read(unpack(args))
+        end
+        
+        if res == nil then
+            if closing then f:close() end
+            return nil
+        end
+        return res
+    end
+end
 
-		local args = { ... }
-		local unpack = table.unpack or unpack
-		return function()
-			local res = f:read(unpack(args))
-			if not res then
-				f:close()
-				return nil
-			end
-			return res
-		end
-	end
+function io.lines(filename, ...)
+    return lines_iterator(filename, ...)
 end
 
 function io.readproc(cmd)

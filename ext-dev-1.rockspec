@@ -49,6 +49,28 @@ build = {
 		["ext.table"] = "table.lua",
 		["ext.timer"] = "timer.lua",
 		["ext.tolua"] = "tolua.lua",
-		["ext.xpcall"] = "xpcall.lua"
+		["ext.xpcall"] = "xpcall.lua",
+        
+        -- [NEW] 新增模块 (Compat & Extensions)
+        ["ext.struct"] = "struct.lua",
+        ["ext.utf8"] = "utf8.lua",
+        ["ext.binary"] = "binary.lua",
+        ["ext.sys_encoding"] = "sys_encoding.lua",
+        
+        -- [NEW] 新增数据结构与工具
+        ["ext.array2d"] = "array2d.lua",
+        ["ext.date"] = "date.lua",
+        ["ext.set"] = "set.lua",
+        ["ext.ordered_map"] = "ordered_map.lua",
+        ["ext.multimap"] = "multimap.lua",
+        ["ext.iter"] = "iter.lua",
+        ["ext.func"] = "func.lua",
+        
+        -- [NEW] 配置文件与解析
+        ["ext.csv"] = "csv.lua",
+        ["ext.xml"] = "xml.lua",
+        ["ext.config"] = "config.lua",
+        ["ext.template"] = "template.lua",
+        ["ext.cli"] = "cli.lua"
 	}
 }

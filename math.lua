@@ -1,6 +1,64 @@
 local math = {}
 for k,v in pairs(require 'math') do math[k] = v end
 
+-- [Added] FFI support for Lua 5.3 integers
+local ffi = require 'ffi'
+local ok_int, _ = pcall(function() return ffi.new("int64_t") end)
+
+if ok_int then
+    math.maxinteger = ffi.new("int64_t", 9223372036854775807LL)
+    math.mininteger = ffi.new("int64_t", -9223372036854775808LL)
+    
+    function math.tointeger(x)
+        x = tonumber(x)
+        if not x then return nil end
+        -- Check if fractional
+        if x % 1 ~= 0 then return nil end
+        -- Check range (double can represent exact integers up to 2^53)
+        -- But Lua 5.3 allows wrapping? No, tointeger returns nil if not representable.
+        -- Actually tointeger casts to integer if representable.
+        if x > tonumber(math.maxinteger) or x < tonumber(math.mininteger) then
+            return nil
+        end
+        return ffi.new("int64_t", x)
+    end
+    
+    function math.type(x)
+        if type(x) == 'number' then
+            -- Plain Lua number is usually double in LuaJIT (unless mapped to int64 by FFI logic, but type() returns 'cdata' for int64)
+            -- Wait, type(1LL) is 'cdata' in LuaJIT.
+            return 'float' 
+        elseif type(x) == 'cdata' then
+            if ffi.istype("int64_t", x) or ffi.istype("uint64_t", x) then
+                return 'integer'
+            end
+        end
+        return nil
+    end
+    
+    function math.ult(m, n)
+        return ffi.cast("uint64_t", m) < ffi.cast("uint64_t", n)
+    end
+else
+    -- Fallback for systems without 64-bit int support (unlikely with LuaJIT)
+    math.maxinteger = 2^53 - 1
+    math.mininteger = -(2^53 - 1)
+    
+    function math.tointeger(x)
+        x = tonumber(x)
+        if not x or x % 1 ~= 0 then return nil end
+        return x
+    end
+    
+    function math.type(x)
+        return type(x) == 'number' and 'float' or nil
+    end
+    
+    function math.ult(m, n)
+        return m < n -- Approximate
+    end
+end
+
 math.nan = 0/0
 
 math.e = math.exp(1)
@@ -8,55 +66,6 @@ math.e = math.exp(1)
 -- luajit and lua 5.1 compat ...
 if not math.atan2 then math.atan2 = math.atan end
 -- also note, code that uses math.atan(y,x) in luajit will instead just call math.atan(y) ...
-
--- some luas don't have hyperbolic trigonometric functions
-
-if not math.sinh then
-	function math.sinh(x)
-		local ex = math.exp(x)
-		return .5 * (ex - 1/ex)
-	end
-end
-
-if not math.cosh then
-	function math.cosh(x)
-		local ex = math.exp(x)
-		return .5 * (ex + 1/ex)
-	end
-end
-
-if not math.tanh then
-	function math.tanh(x)
---[[ this isn't so stable.
-		local ex = math.exp(x)
-		return (ex - 1/ex) / (ex + 1/ex)
---]]
--- [[ instead...
--- if e^-2x < smallest float epsilon
--- then consider (e^x  - e^-x) ~ e^x .. well, it turns out to be 1
--- and if e^2x < smallest float epsilon then -1
-		if x < 0 then
-			local e2x = math.exp(2*x)
-			return (e2x - 1) / (e2x + 1)
-		else
-			local em2x = math.exp(-2*x)
-			return (1 - em2x) / (1 + em2x)
-		end
---]]
-	end
-end
-
-function math.asinh(x)
-	return math.log(x + math.sqrt(x*x + 1))
-end
-
-function math.acosh(x)
-	return math.log(x + math.sqrt(x*x - 1))
-end
-
-function math.atanh(x)
-	return .5 * math.log((1 + x) / (1 - x))
-end
 
 function math.cbrt(x)
 	return math.sign(x) * math.abs(x)^(1/3)

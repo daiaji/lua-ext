@@ -30,7 +30,6 @@ return function(env)
 	end, function() end)
 	if xpcallCanFwdArgs then
 		if not xpcallHasDefaultErrorHandler then
-			-- xpcall arg forwarding works
 			-- just replace xpcall with a default error handler
 			local newxpcall = function(f, err, ...)
 				err = err or defaultErrorHandler
@@ -39,17 +38,5 @@ return function(env)
 			env.xpcall = newxpcall
 		end
 	else
-		-- xpcall arg forwarding doesn't work
-		-- replace it with an xpcall that does arg forwarding
-		local unpack = env.unpack or table.unpack
-		local newxpcall = function(f, err, ...)
-			err = err or defaultErrorHandler
-			local args = {...}
-			args.n = select('#', ...)
-			return oldxpcall(function()
-				return f(unpack(args, 1, args.n))
-			end, err)
-		end
-		env.xpcall = newxpcall
 	end
 end

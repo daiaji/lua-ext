@@ -9,6 +9,84 @@ for k,v in pairs(require 'string') do string[k] = v end
 
 local table = require 'ext.table'
 
+-- [Added] Struct support
+local struct = require 'ext.struct'
+string.pack = struct.pack
+string.unpack = struct.unpack
+string.packsize = struct.packsize
+
+-- [Modified] Enhanced format to support %q for tables and %s auto-tostring
+local original_format = string.format
+function string.format(fmt, ...)
+    local args = {...}
+    local n = select('#', ...)
+    
+    -- Fast path if no %s or %q? 
+    -- We can't easily detect if %s/q corresponds to which arg without parsing.
+    -- So we have to parse or intercept.
+    
+    -- Simple heuristic interception for %s:
+    -- If we just run original_format, it might error.
+    -- "bad argument #N to 'format' (string expected, got nil/table)"
+    
+    -- We'll iterate the format string to identify types for args.
+    -- This is expensive but necessary for full compat.
+    
+    -- Alternatively, pre-process args: tostring everything that targets %s?
+    -- No, %d expects number.
+    
+    -- Let's try to match args to specifiers.
+    local arg_i = 1
+    local new_args = {}
+    
+    -- Pattern to find format specifiers: % [flags] [width] [.precision] type
+    -- Flags: - + space # 0
+    for prefix, spec in fmt:gmatch("([^%%]*)%%([%-%+ #0]*%d*%.?%d*[a-zA-Z])") do
+        -- spec contains the full specifier after %, e.g. "02d", ".5f", "s"
+        local type_char = spec:sub(-1)
+        
+        if type_char == '%' then
+            -- Literal % (%%), no arg consumed
+        else
+            local val = args[arg_i]
+            
+            if type_char == 's' then
+                -- %s: convert to string
+                if val == nil then 
+                    args[arg_i] = "nil" 
+                else
+                    args[arg_i] = tostring(val)
+                end
+            elseif type_char == 'q' then
+                -- %q: quote
+                -- If it's a table, we should probably serialize it?
+                -- Lua 5.3 spec says %q formats a string safely.
+                -- compat53 seems to allow tables via recursion or serialization?
+                -- We'll stick to a basic readable format or just standard %q if it's string.
+                if type(val) == 'table' then
+                    -- Very basic serialization for %q table support
+                    local s = tostring(val)
+                    -- For full table serialization we'd need ext.tolua, but let's avoid deep deps here if possible.
+                    -- Just quote the tostring result.
+                    -- Or better: recursively format? No, that's %p.
+                    -- Let's assume %q on table just quotes its string representation.
+                    -- Note: Lua 5.3 %q works on numbers too.
+                    -- We'll convert non-strings to strings and then quote.
+                    args[arg_i] = tostring(val) 
+                    -- Note: original_format %q only works on strings in 5.1.
+                    -- We must ensure the arg passed to original_format is a string.
+                elseif type(val) ~= 'string' then
+                    args[arg_i] = tostring(val)
+                end
+            end
+            
+            arg_i = arg_i + 1
+        end
+    end
+    
+    return original_format(fmt, unpack(args, 1, n))
+end
+
 -- table.concat(string.split(a,b),b) == a
 function string.split(s, exp)
 	exp = exp or ''
