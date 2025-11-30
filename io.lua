@@ -9,7 +9,10 @@ local win_convert = nil
 local ffi = require 'ffi'
 if ffi.os == 'Windows' then
     pcall(function()
-        local k32 = require 'ffi.req' 'Windows.sdk.kernel32'
+        -- [Fix] require needs to be protected or ensure lua-ffi-bindings exists
+        local ok, k32 = pcall(require, 'ffi.req', 'Windows.sdk.kernel32')
+        if not ok then return end
+        
         local CP_ACP = 0
         local CP_UTF8 = 65001
         
@@ -199,61 +202,66 @@ end
 local ffi = require 'ffi'
 local PopenMeta 
 
-if ffi.os == 'Windows' and lfs then
-	local kernel32 = require 'ffi.req' 'Windows.sdk.kernel32'
-	local C = ffi.C
-	local CP_UTF8 = 65001
+-- [FIX] Check 'has_lfs' (boolean) instead of 'lfs' (which might be an error string if pcall failed)
+if ffi.os == 'Windows' and has_lfs then
+    -- [FIX] Use pcall for ffi.req loading to prevent crash if bindings are missing
+    local ok, kernel32 = pcall(require, 'ffi.req', 'Windows.sdk.kernel32')
+    
+    if ok and kernel32 then
+        local C = ffi.C
+        local CP_UTF8 = 65001
 
-	local function to_wide(str)
-		if not str then return nil end
-		local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
-		if len == 0 then return nil end
-		local buf = ffi.new("wchar_t[?]", len)
-		kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
-		return buf
-	end
+        local function to_wide(str)
+            if not str then return nil end
+            local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
+            if len == 0 then return nil end
+            local buf = ffi.new("wchar_t[?]", len)
+            kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
+            return buf
+        end
 
-	ffi.cdef[[
-		typedef struct _iobuf FILE;
-		FILE* _wpopen(const wchar_t* command, const wchar_t* mode);
-		int _pclose(FILE* stream);
-	]]
+        ffi.cdef[[
+            typedef struct _iobuf FILE;
+            FILE* _wpopen(const wchar_t* command, const wchar_t* mode);
+            int _pclose(FILE* stream);
+        ]]
 
-	PopenMeta = {
-		__index = {},
-		__gc = function(self) self:close() end
-	}
+        PopenMeta = {
+            __index = {},
+            __gc = function(self) self:close() end
+        }
 
-	function PopenMeta.__index:read(...)
-		if lfs.FileHandle and lfs.FileHandle.read then
-			return lfs.FileHandle.read(self, ...)
-		end
-		return nil, "FileHandle.read not available"
-	end
+        function PopenMeta.__index:read(...)
+            if lfs.FileHandle and lfs.FileHandle.read then
+                return lfs.FileHandle.read(self, ...)
+            end
+            return nil, "FileHandle.read not available"
+        end
 
-	function PopenMeta.__index:lines(...)
-		return io.lines(self, ...)
-	end
+        function PopenMeta.__index:lines(...)
+            return io.lines(self, ...)
+        end
 
-	function PopenMeta.__index:close()
-		if self.fp then
-			local ret = C._pclose(self.fp)
-			self.fp = nil
-			return true, "exit", ret
-		end
-		return nil, "already closed"
-	end
+        function PopenMeta.__index:close()
+            if self.fp then
+                local ret = C._pclose(self.fp)
+                self.fp = nil
+                return true, "exit", ret
+            end
+            return nil, "already closed"
+        end
 
-	function io.popen(cmd, mode)
-		mode = mode or 'r'
-		local wcmd = to_wide(cmd)
-		local wmode = to_wide(mode)
-		local fp = C._wpopen(wcmd, wmode)
+        function io.popen(cmd, mode)
+            mode = mode or 'r'
+            local wcmd = to_wide(cmd)
+            local wmode = to_wide(mode)
+            local fp = C._wpopen(wcmd, wmode)
 
-		if fp == nil then return nil, "popen failed" end
+            if fp == nil then return nil, "popen failed" end
 
-		return setmetatable({ fp = fp }, PopenMeta)
-	end
+            return setmetatable({ fp = fp }, PopenMeta)
+        end
+    end
 end
 
 if ffi.os == 'Windows' and has_lfs then
