@@ -70,20 +70,20 @@ jobs:
           # 2. Dependencies
           
           # A. lua-ffi-bindings
-          $ffiDest = New-Item -ItemType Directory -Path "$lua/ffi" -Force
+          # Copy contents directly to $lua so that 'ffi/req.lua' lands in '$lua/ffi/req.lua'
           if (Test-Path "vendor/lua-ffi-bindings") {
-             Copy-Item "vendor/lua-ffi-bindings/*" $ffiDest -Recurse -Exclude ".git"
+             Copy-Item "vendor/lua-ffi-bindings/*" $lua -Recurse -Exclude ".git" -Force
           } else {
              Write-Warning "vendor/lua-ffi-bindings not found."
           }
 
-          # B. luafilesystem
-          $lfsDest = New-Item -ItemType Directory -Path "$lua/luafilesystem" -Force
+          # B. luafilesystem (lfs_ffi)
+          # Ensure lfs_ffi.lua is in the root of lua path ($lua/lfs_ffi.lua) so "require 'lfs_ffi'" works
           if (Test-Path "vendor/luafilesystem/lfs_ffi.lua") {
-              Copy-Item "vendor/luafilesystem/lfs_ffi.lua" $lfsDest
+              Copy-Item "vendor/luafilesystem/lfs_ffi.lua" $lua -Force
           } else {
               Write-Host "Downloading lfs_ffi.lua..."
-              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/daiaji/luafilesystem/main/lfs_ffi.lua" -OutFile "$lfsDest/lfs_ffi.lua"
+              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/daiaji/luafilesystem/main/lfs_ffi.lua" -OutFile "$lua/lfs_ffi.lua"
           }
 
           # C. LuaUnit
@@ -97,7 +97,6 @@ jobs:
           $extDir = New-Item -ItemType Directory -Path "$lua/ext" -Force
           
           # Copy all .lua files from root to stage/lua/ext/
-          # Using Copy-Item directly with wildcard
           Copy-Item ".\*.lua" -Destination $extDir -Force
           
           # Verify copy happened
@@ -106,10 +105,11 @@ jobs:
               exit 1
           }
           
-          # Move ext.lua to stage/lua/ext.lua so "require 'ext'" works
+          # Copy (not Move) ext.lua to stage/lua/ext.lua so "require 'ext'" works
+          # We keep the copy in stage/lua/ext/ext.lua so "require 'ext.ext'" also works
           $srcExtLua = Join-Path $extDir "ext.lua"
           $dstExtLua = Join-Path $lua "ext.lua"
-          Move-Item -Path $srcExtLua -Destination $dstExtLua -Force
+          Copy-Item -Path $srcExtLua -Destination $dstExtLua -Force
 
           # 4. Tests
           if (Test-Path "tests") {
