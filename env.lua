@@ -38,6 +38,7 @@ return function(env)
 	env.MultiMap   = require 'ext.multimap'
 	env.Array2D    = require 'ext.array2d'
 	env.Date       = require 'ext.date'
+	env.binary     = require 'ext.binary' -- [Added] Binary buffer support
 
 	-- Functional programming shortcuts
 	local func     = require 'ext.func'

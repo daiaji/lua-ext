@@ -6,8 +6,27 @@ table.__index = table
 -- [Modified] Lazy require Iter to avoid circular dependency (iter requires table)
 -- local Iter = require 'ext.iter' 
 
+-- [OPTIMIZATION] LuaJIT Performance Extensions
+-- 尝试加载 LuaJIT 原生的 table.new 和 table.clear
+local ok_new, jit_new = pcall(require, "table.new")
+if ok_new then table.new_jit = jit_new end
+
+local ok_clear, jit_clear = pcall(require, "table.clear")
+if ok_clear then table.clear = jit_clear end
+
 function table.new(...)
-	return setmetatable({}, table):union(...)
+	-- [OPTIMIZATION] 如果可用，使用 LuaJIT 的 table.new(narray, nhash)
+	-- 注意：LuaJIT 的 table.new 接受 (narray, nhash)，而这里的 table.new 接口设计为接收多个 table 进行合并
+	-- 为了保持 API 兼容性，我们只在没有参数或参数符合 LuaJIT 签名时尝试优化，或者仅用于元表设置
+	-- 这里主要保留原有的 union 逻辑，但优化空表创建
+	local n = select('#', ...)
+	local t
+	if n == 0 and table.new_jit then
+		t = table.new_jit(0, 0)
+	else
+		t = {}
+	end
+	return setmetatable(t, table):union(...)
 end
 
 setmetatable(table, {

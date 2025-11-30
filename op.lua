@@ -14,6 +14,9 @@ local load = loadstring or load
 -- and honestly I should be defaulting to the 'bit' library anyways, esp in the case of luajit where it is translated to an asm opcode
 local lua53 = _VERSION >= 'Lua 5.3'
 
+-- [OPTIMIZATION] Detect LuaJIT for optimal bit library usage
+local luajit = (jit ~= nil)
+
 local symbolscode = [[
 
 	-- which fields are unary operators
@@ -54,30 +57,6 @@ if lua53 then
 		shr = '>>',			-- 5.3
 		bnot = '~',			-- 5.3, unary
 ]]
---[[ alternatively, luajit 'bit' library:
-I should probably include all of these instead
-would there be a perf hit from directly assigning these functions to my own table,
- as there is a perf hit for assigning from ffi.C func ptrs to other variables?  probably.
- how about as a tail call / vararg forwarding?
-I wonder if luajit adds extra metamethods
-
-luajit 2.0		lua 5.2		lua 5.3
-band			band		&
-bnot			bnot		~
-bor				bor			|
-bxor			bxor		~
-lshift			lshift		<<
-rshift			rshift		>>
-arshift			arshift
-rol				lrotate
-ror				rrotate
-bswap (reverses 32-bit integer endian-ness of bytes)
-tobit (converts from lua number to its signed 32-bit value)
-tohex (string conversion)
-				btest (does some bitflag stuff)
-				extract (same)
-				replace (same)
---]]
 end
 symbolscode = symbolscode .. [[
 	}
@@ -90,15 +69,35 @@ local code = symbolscode .. [[
 	local ops
 	ops = {
 ]]
+
+-- [OPTIMIZATION] For LuaJIT, inject the native bitop library directly into the ops table
+if luajit then
+	local bit = require("bit")
+	-- LuaJIT bit op mapping to standard names used here
+	-- Note: LuaJIT 'bit' library functions are: band, bor, bxor, bnot, lshift, rshift, arshift, rol, rror, tobit, tohex, bswap
+	-- We map the common ones to the 'ops' table structure
+	code = code .. [[
+		band = require("bit").band,
+		bor = require("bit").bor,
+		bxor = require("bit").bxor,
+		bnot = require("bit").bnot,
+		shl = require("bit").lshift,
+		shr = require("bit").rshift,
+	]]
+end
+
 for name,symbol in pairs(symbols) do
-	if unary[name] then
-		code = code .. [[
-		]]..name..[[ = function(a) return ]]..symbol..[[ a end,
-]]
-	else
-		code = code .. [[
-		]]..name..[[ = function(a,b) return a ]]..symbol..[[ b end,
-]]
+	-- Skip bitwise ops if we already injected optimized JIT versions
+	if not (luajit and (name == 'band' or name == 'bor' or name == 'bxor' or name == 'bnot' or name == 'shl' or name == 'shr')) then
+		if unary[name] then
+			code = code .. [[
+			]]..name..[[ = function(a) return ]]..symbol..[[ a end,
+	]]
+		else
+			code = code .. [[
+			]]..name..[[ = function(a,b) return a ]]..symbol..[[ b end,
+	]]
+		end
 	end
 end
 code = code .. [[

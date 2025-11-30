@@ -2,6 +2,14 @@ local detect_ffi = require 'ext.detect_ffi'
 local result
 local function detect_os()
 	if result ~= nil then return result end
+	
+	-- [OPTIMIZATION] Try standard Lua way first (package.config)
+	-- The first character of package.config is the directory separator
+	if package.config and package.config:sub(1,1) == '\\' then
+		result = true
+		return result
+	end
+	
 	local ffi = detect_ffi()
 	if ffi then
 		result = ffi.os == 'Windows'

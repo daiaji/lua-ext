@@ -15,7 +15,7 @@ if not newproxy then return end
 -- TODO accept an 'env' param like so many other of my override functions ... maybe ... tho I don't do this with all, do I?
 local gcProxies = setmetatable({}, {__mode='k'})
 local oldsetmetatable = setmetatable
-function setmetatable(t, mt)
+local function setmetatable(t, mt)
 	local oldp = gcProxies[t]
 	if oldp then
 		getmetatable(oldp).__gc = nil
@@ -34,3 +34,8 @@ function setmetatable(t, mt)
 
 	return oldsetmetatable(t, mt)
 end
+
+-- [Fix] Explicitly update global setmetatable to ensure it works across environments
+_G.setmetatable = setmetatable
+
+return setmetatable
