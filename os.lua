@@ -14,8 +14,9 @@ local assert = require 'ext.assert'
 local detect_lfs = require 'ext.detect_lfs'
 local detect_os = require 'ext.detect_os'
 
--- [Modified] Require lfs_ffi for enhanced file operations
-local lfs = require 'lfs_ffi'
+-- [Modified] Soft require for lfs_ffi to prevent crash if dependencies are missing
+local has_lfs, lfs = pcall(require, 'lfs_ffi')
+if not has_lfs then lfs = nil end
 
 os.sep = detect_os() and '\\' or '/'
 
@@ -52,7 +53,7 @@ end
 -- [Modified] Override os.remove to use FFI version if available (supports Unicode on Windows)
 local orig_remove = os.remove
 function os.remove(path)
-	if lfs.remove_file then
+	if lfs and lfs.remove_file then
 		if lfs.remove_file(path) then return true end
 		return nil, "remove failed"
 	else
@@ -184,7 +185,7 @@ function os.move(from, to)
     to = tostring(to)
 
 	-- 1. Try lfs_ffi first (if it implements rename_file)
-	if lfs.rename_file then
+	if lfs and lfs.rename_file then
 		if lfs.rename_file(from, to) then return true end
 	end
 
@@ -193,51 +194,44 @@ function os.move(from, to)
 	local detect_ffi = require 'ext.detect_ffi'
 	local ffi = detect_ffi()
 	if ffi and ffi.os == 'Windows' then
-		local kernel32 = require 'ffi.req' 'Windows.sdk.kernel32'
-		local CP_UTF8 = 65001
-		
-		-- Define helper locally to avoid dependency on external scope
-		local function to_wide(str)
-			if not str then return nil end
-			local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
-			local buf = ffi.new("wchar_t[?]", len)
-			kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
-			return buf
-		end
-		
-		-- MOVEFILE_COPY_ALLOWED (2) | MOVEFILE_REPLACE_EXISTING (1) = 3
-		local flags = 3 
-		if kernel32.MoveFileExW(to_wide(from), to_wide(to), flags) ~= 0 then
-			return true
-		else
-			-- Fallthrough to legacy methods if MoveFileExW fails
-		end
+		local ok, kernel32 = pcall(require, 'ffi.req', 'Windows.sdk.kernel32')
+        if ok then
+            local CP_UTF8 = 65001
+            
+            -- Define helper locally to avoid dependency on external scope
+            local function to_wide(str)
+                if not str then return nil end
+                local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
+                local buf = ffi.new("wchar_t[?]", len)
+                kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
+                return buf
+            end
+            
+            -- MOVEFILE_COPY_ALLOWED (2) | MOVEFILE_REPLACE_EXISTING (1) = 3
+            local flags = 3 
+            if kernel32.MoveFileExW(to_wide(from), to_wide(to), flags) ~= 0 then
+                return true
+            else
+                -- Fallthrough to legacy methods if MoveFileExW fails
+            end
+        end
 	end
 
 	if ffi then
-		-- if we have ffi then we can use <stdio.h> rename()
-		local stdio = require 'ffi.req' 'c.stdio'
-		local errno = require 'ffi.req' 'c.errno'
-		if stdio.rename(from, to) == 0 then return true end
-		return nil, errno.str()
-	else
-		-- [[ shell
-		-- alternatively I could write this as readfile/writefile and os.remove
-		from = os.path(from)
-		to = os.path(to)
-		local cmd = (detect_os() and 'move' or 'mv') .. ' "'..from..'" "'..to..'"'
-		return os.execute(cmd)
-		--]]
-		--[[ worst case, rewrite it.
-		-- use the generic os.copy defined above
-		local res, err = os.copy(from, to)
-		if res then 
-			os.remove(from) 
-			return true
-		end
-		return nil, err
-		--]]
+        -- [FIX] pcall require ffi.req to allow safe fallback
+        local ok_stdio, stdio = pcall(require, 'ffi.req', 'c.stdio')
+		local ok_errno, errno = pcall(require, 'ffi.req', 'c.errno')
+		if ok_stdio and ok_errno then
+            if stdio.rename(from, to) == 0 then return true end
+            return nil, errno.str()
+        end
 	end
+
+    -- Fallback shell
+    from = os.path(from)
+    to = os.path(to)
+    local cmd = (detect_os() and 'move' or 'mv') .. ' "'..from..'" "'..to..'"'
+    return os.execute(cmd)
 end
 
 function os.isdir(fn)
@@ -402,158 +396,148 @@ end
 
 local ffi = require 'ffi'
 if ffi.os == 'Windows' then
-	local kernel32 = require 'ffi.req' 'Windows.sdk.kernel32'
-	-- corecrt_wstdlib for _wgetenv, _wputenv
-	require 'ffi.req' 'c.corecrt_wstdlib'
-	-- process for _wsystem
-	require 'ffi.req' 'c.process'
-	-- [Added] user32 for MsgWaitForMultipleObjects
-	local user32 = require 'ffi.req' 'Windows.sdk.user32'
+    -- [FIX] Use safe requires for FFI bindings
+    local ok_k32, kernel32 = pcall(require, 'ffi.req', 'Windows.sdk.kernel32')
+    local ok_std, _ = pcall(require, 'ffi.req', 'c.corecrt_wstdlib')
+    local ok_proc, _ = pcall(require, 'ffi.req', 'c.process')
+    local ok_usr, user32 = pcall(require, 'ffi.req', 'Windows.sdk.user32')
 
-	local C = ffi.C
-	local CP_UTF8 = 65001
+    if ok_k32 and ok_std and ok_proc then
+        local C = ffi.C
+        local CP_UTF8 = 65001
 
-	-- Helper: UTF-8 string -> WCHAR*
-	local function to_wide(str)
-		if not str then return nil end
-		local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
-		if len == 0 then return nil end
-		local buf = ffi.new("wchar_t[?]", len)
-		kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
-		return buf
-	end
+        -- Helper: UTF-8 string -> WCHAR*
+        local function to_wide(str)
+            if not str then return nil end
+            local len = kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, nil, 0)
+            if len == 0 then return nil end
+            local buf = ffi.new("wchar_t[?]", len)
+            kernel32.MultiByteToWideChar(CP_UTF8, 0, str, -1, buf, len)
+            return buf
+        end
 
-	-- Helper: WCHAR* -> UTF-8 string
-	local function from_wide(wstr)
-		if wstr == nil then return nil end
-		local len = kernel32.WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nil, 0, nil, nil)
-		if len == 0 then return nil end
-		local buf = ffi.new("char[?]", len)
-		kernel32.WideCharToMultiByte(CP_UTF8, 0, wstr, -1, buf, len, nil, nil)
-		return ffi.string(buf)
-	end
+        -- Helper: WCHAR* -> UTF-8 string
+        local function from_wide(wstr)
+            if wstr == nil then return nil end
+            local len = kernel32.WideCharToMultiByte(CP_UTF8, 0, wstr, -1, nil, 0, nil, nil)
+            if len == 0 then return nil end
+            local buf = ffi.new("char[?]", len)
+            kernel32.WideCharToMultiByte(CP_UTF8, 0, wstr, -1, buf, len, nil, nil)
+            return ffi.string(buf)
+        end
 
-	-- Override os.execute to support unicode commands
-	function os.execute(cmd)
-		if not cmd then
-			-- check shell availability
-			return C._wsystem(nil) ~= 0
-		end
+        -- Override os.execute to support unicode commands
+        function os.execute(cmd)
+            if not cmd then
+                -- check shell availability
+                return C._wsystem(nil) ~= 0
+            end
 
-		local wcmd = to_wide(cmd)
-		local status = C._wsystem(wcmd)
+            local wcmd = to_wide(cmd)
+            local status = C._wsystem(wcmd)
 
-		-- Simulate Lua 5.2+ return format
-		if status == -1 then
-			return nil, "execution failed", -1
-		end
-		return (status == 0), "exit", status
-	end
+            -- Simulate Lua 5.2+ return format
+            if status == -1 then
+                return nil, "execution failed", -1
+            end
+            return (status == 0), "exit", status
+        end
 
-	-- Override os.getenv to support unicode environment variables
-	function os.getenv(varname)
-		local wvar = to_wide(varname)
-		local wval = C._wgetenv(wvar)
-		return from_wide(wval)
-	end
+        -- Override os.getenv to support unicode environment variables
+        function os.getenv(varname)
+            local wvar = to_wide(varname)
+            local wval = C._wgetenv(wvar)
+            return from_wide(wval)
+        end
 
-	-- Override os.setenv (not standard lua, but good to have)
-	function os.setenv(varname, value)
-		-- [Fix] Use _wputenv_s instead of _wputenv to prevent use-after-free.
-		-- _wputenv_s creates a copy of the string in the environment block.
-		-- _wputenv expects the pointer to remain valid (but our ffi.new'd pointer will be GC'd).
-		local wvar = to_wide(varname)
-		local wval = value and to_wide(value) or to_wide("") -- Empty string removes variable in _wputenv_s
-		
-		return C._wputenv_s(wvar, wval) == 0
-	end
+        -- Override os.setenv (not standard lua, but good to have)
+        function os.setenv(varname, value)
+            local wvar = to_wide(varname)
+            local wval = value and to_wide(value) or to_wide("")
+            return C._wputenv_s(wvar, wval) == 0
+        end
 
-	-- Helper to convert UTF-8 path to ANSI (CP_ACP)
-	-- Useful for passing paths to legacy DLLs that don't support Unicode
-	function os.toansi(str)
-		if not str then return nil end
-		local wstr = to_wide(str)
-		if not wstr then return nil end
-		
-		local CP_ACP = 0
-		local len = kernel32.WideCharToMultiByte(CP_ACP, 0, wstr, -1, nil, 0, nil, nil)
-		if len == 0 then return nil end
-		local buf = ffi.new("char[?]", len)
-		kernel32.WideCharToMultiByte(CP_ACP, 0, wstr, -1, buf, len, nil, nil)
-		return ffi.string(buf)
-	end
+        function os.toansi(str)
+            if not str then return nil end
+            local wstr = to_wide(str)
+            if not wstr then return nil end
+            
+            local CP_ACP = 0
+            local len = kernel32.WideCharToMultiByte(CP_ACP, 0, wstr, -1, nil, 0, nil, nil)
+            if len == 0 then return nil end
+            local buf = ffi.new("char[?]", len)
+            kernel32.WideCharToMultiByte(CP_ACP, 0, wstr, -1, buf, len, nil, nil)
+            return ffi.string(buf)
+        end
 
-	-- Helper to get the 8.3 short path (ASCII)
-	-- Useful for legacy DLLs, but requires file to exist
-	function os.shortpath(path)
-		local wpath = to_wide(path)
-		if not wpath then return path end
-		
-		local len = kernel32.GetShortPathNameW(wpath, nil, 0)
-		if len == 0 then return path end
-		
-		local buf = ffi.new("wchar_t[?]", len)
-		kernel32.GetShortPathNameW(wpath, buf, len)
-		return from_wide(buf)
-	end
+        function os.shortpath(path)
+            local wpath = to_wide(path)
+            if not wpath then return path end
+            
+            local len = kernel32.GetShortPathNameW(wpath, nil, 0)
+            if len == 0 then return path end
+            
+            local buf = ffi.new("wchar_t[?]", len)
+            kernel32.GetShortPathNameW(wpath, buf, len)
+            return from_wide(buf)
+        end
 
-	-- Override os.tmpname to support unicode paths
-	function os.tmpname()
-		local MAX_PATH = 261
-		local buf = ffi.new("wchar_t[?]", MAX_PATH)
-		local len = kernel32.GetTempPathW(MAX_PATH, buf)
-		if len == 0 then return nil end
-		
-		local filename_buf = ffi.new("wchar_t[?]", MAX_PATH)
-		if kernel32.GetTempFileNameW(buf, to_wide("lua"), 0, filename_buf) == 0 then
-			return nil
-		end
-		return from_wide(filename_buf)
-	end
+        function os.tmpname()
+            local MAX_PATH = 261
+            local buf = ffi.new("wchar_t[?]", MAX_PATH)
+            local len = kernel32.GetTempPathW(MAX_PATH, buf)
+            if len == 0 then return nil end
+            
+            local filename_buf = ffi.new("wchar_t[?]", MAX_PATH)
+            if kernel32.GetTempFileNameW(buf, to_wide("lua"), 0, filename_buf) == 0 then
+                return nil
+            end
+            return from_wide(filename_buf)
+        end
 
-	-- [Added] Non-blocking Sleep (Message Pump) for GUI responsiveness
-	function os.sleep_pump(ms)
-		local start = kernel32.GetTickCount()
-		local elapsed = 0
-		local QS_ALLINPUT = 0x04FF
-		local PM_REMOVE = 1
-		local msg = ffi.new("MSG")
+        -- [Added] Non-blocking Sleep (Message Pump)
+        if ok_usr and user32 then
+            function os.sleep_pump(ms)
+                local start = kernel32.GetTickCount()
+                local elapsed = 0
+                local QS_ALLINPUT = 0x04FF
+                local PM_REMOVE = 1
+                local msg = ffi.new("MSG")
 
-		while elapsed < ms do
-			local remaining = ms - elapsed
-			-- Wait for message or timeout
-			local res = user32.MsgWaitForMultipleObjects(0, nil, 0, remaining, QS_ALLINPUT)
-			
-			if res == 0 then -- WAIT_OBJECT_0
-				-- Pump messages
-				while user32.PeekMessageW(msg, nil, 0, 0, PM_REMOVE) ~= 0 do
-					if msg.message == 0x0012 then -- WM_QUIT
-						user32.PostQuitMessage(msg.wParam)
-						return -- Stop sleeping immediately
-					end
-					user32.TranslateMessage(msg)
-					user32.DispatchMessageW(msg)
-				end
-			end
-			elapsed = kernel32.GetTickCount() - start
-		end
-	end
+                while elapsed < ms do
+                    local remaining = ms - elapsed
+                    local res = user32.MsgWaitForMultipleObjects(0, nil, 0, remaining, QS_ALLINPUT)
+                    
+                    if res == 0 then 
+                        while user32.PeekMessageW(msg, nil, 0, 0, PM_REMOVE) ~= 0 do
+                            if msg.message == 0x0012 then 
+                                user32.PostQuitMessage(msg.wParam)
+                                return 
+                            end
+                            user32.TranslateMessage(msg)
+                            user32.DispatchMessageW(msg)
+                        end
+                    end
+                    elapsed = kernel32.GetTickCount() - start
+                end
+            end
+        end
 
-	-- [Added] Standardized File Copy (Unicode aware)
-	-- This OVERWRITES the generic one defined above
-	function os.copy(src, dst, fail_if_exists)
-        -- [FIX] Ensure arguments are strings (handles Path objects)
-        src = tostring(src)
-        dst = tostring(dst)
-        
-		local wsrc = to_wide(src)
-		local wdst = to_wide(dst)
-		if kernel32.CopyFileW(wsrc, wdst, fail_if_exists and 1 or 0) ~= 0 then
-			return true
-		else
-			return false, "CopyFileW failed: " .. tostring(kernel32.GetLastError())
-		end
-	end
+        -- [Added] Standardized File Copy (Unicode aware)
+        function os.copy(src, dst, fail_if_exists)
+            -- [FIX] Ensure arguments are strings (handles Path objects)
+            src = tostring(src)
+            dst = tostring(dst)
+            
+            local wsrc = to_wide(src)
+            local wdst = to_wide(dst)
+            if kernel32.CopyFileW(wsrc, wdst, fail_if_exists and 1 or 0) ~= 0 then
+                return true
+            else
+                return false, "CopyFileW failed: " .. tostring(kernel32.GetLastError())
+            end
+        end
+    end
 end
 
 return os

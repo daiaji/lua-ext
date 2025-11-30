@@ -70,20 +70,17 @@ jobs:
           # 2. Dependencies
           
           # A. lua-ffi-bindings
-          # Check for ffi folder specifically to be safe
+          # [FIX] Copy the 'ffi' folder explicitly to ensure correct structure ($lua/ffi/req.lua)
           if (Test-Path "vendor/lua-ffi-bindings/ffi") {
-             Write-Host "Copying lua-ffi-bindings/ffi to stage/lua..."
-             # Copy the ffi folder directly to stage/lua to ensure structure is preserved
-             # This creates stage/lua/ffi
+             Write-Host "Copying vendor/lua-ffi-bindings/ffi to $lua/ffi..."
              Copy-Item -Path "vendor/lua-ffi-bindings/ffi" -Destination "$lua" -Recurse -Force
           } else {
-             Write-Warning "vendor/lua-ffi-bindings/ffi not found."
-             Get-ChildItem "vendor/lua-ffi-bindings" -Recurse | Select-Object FullName
+             Write-Warning "vendor/lua-ffi-bindings/ffi not found. Listing vendor content:"
+             Get-ChildItem "vendor" -Recurse | Select-Object FullName
           }
 
           # B. luafilesystem (lfs_ffi)
           $lfsDest = New-Item -ItemType Directory -Path "$lua/luafilesystem" -Force
-          # Ensure lfs_ffi.lua is in the root of lua path ($lua/lfs_ffi.lua) so "require 'lfs_ffi'" works
           if (Test-Path "vendor/luafilesystem/lfs_ffi.lua") {
               Copy-Item "vendor/luafilesystem/lfs_ffi.lua" $lua -Force
           } else {
@@ -122,8 +119,8 @@ jobs:
               Write-Warning "tests directory not found in root"
           }
 
-          # Debug: Show Lua Directory Structure
-          Write-Host "Lua Directory Structure:"
+          # Debug: Dump Lua Directory Structure
+          Write-Host "=== Lua Directory Structure ==="
           Get-ChildItem -Path "$lua" -Recurse | Select-Object FullName
 
           # Save Path
