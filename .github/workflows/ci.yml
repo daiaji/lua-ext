@@ -2,117 +2,118 @@ name: Lua-Ext CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   pull_request:
-    branches: [ "main", "master" ]
+    branches: ["main", "master"]
   workflow_dispatch:
 
 jobs:
-  test-windows:
-    name: Test on Windows (LuaJIT)
+  test-suite:
+    name: Full Test Suite (Windows)
     runs-on: windows-latest
-    timeout-minutes: 10
 
     env:
-      LUAJIT_BIN_DIR: ${{ github.workspace }}\.luajit_bin
-      LUAJIT_SRC_DIR: vendor/luajit/src
+      LUAJIT_BIN_DIR: ${{ github.workspace }}\.luajit
 
     steps:
-      - name: Checkout Lua-Ext
+      - name: Checkout
         uses: actions/checkout@v4
         with:
-          # [优化 1] 停止递归！只拉取顶层 vendor 下的库
-          submodules: 'true' 
+          submodules: recursive
 
-      - name: Setup MSVC
-        uses: ilammy/msvc-dev-cmd@v1
-
-      # [优化 2] 缓存 LuaJIT 编译产物
+      # 缓存 LuaJIT 构建产物
       - name: Cache LuaJIT Build
         id: cache-luajit
         uses: actions/cache@v3
         with:
           path: ${{ env.LUAJIT_BIN_DIR }}
-          key: ${{ runner.os }}-luajit-${{ hashFiles('vendor/luajit/.git') }}
+          # 使用 vendor/luajit 的 .git/HEAD 或 commit hash 作为 key 比较稳妥
+          # 这里简单使用 .git 目录哈希
+          key: ${{ runner.os }}-luajit-${{ hashFiles('vendor/luajit/.git/HEAD') }}
           restore-keys: |
             ${{ runner.os }}-luajit-
 
-      # 只有在缓存未命中时才编译
+      - name: Setup MSVC
+        if: steps.cache-luajit.outputs.cache-hit != 'true'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Build LuaJIT
         if: steps.cache-luajit.outputs.cache-hit != 'true'
         shell: cmd
         run: |
-          cd %LUAJIT_SRC_DIR%
+          cd vendor/luajit/src
           call msvcbuild.bat gc64
           if %errorlevel% neq 0 exit /b %errorlevel%
-          
-          mkdir "%LUAJIT_BIN_DIR%"
-          copy luajit.exe "%LUAJIT_BIN_DIR%\"
-          copy lua51.dll "%LUAJIT_BIN_DIR%\"
-          
+
+          mkdir "%LUAJIT_BIN_DIR%\bin"
+          copy luajit.exe "%LUAJIT_BIN_DIR%\bin\"
+          copy lua51.dll "%LUAJIT_BIN_DIR%\bin\"
+
           mkdir "%LUAJIT_BIN_DIR%\jit"
           xcopy /s /y "jit\*.*" "%LUAJIT_BIN_DIR%\jit\"
 
-      - name: Add LuaJIT to PATH
-        shell: pwsh
-        run: echo "${{ env.LUAJIT_BIN_DIR }}" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      # [优化 3] 准备依赖环境
-      - name: Setup Dependencies
+      - name: Assemble Test Environment
         shell: pwsh
         run: |
-          $envDir = "$PWD\.test_env"
-          if (Test-Path $envDir) { Remove-Item $envDir -Recurse -Force }
-          New-Item -ItemType Directory -Path $envDir -Force | Out-Null
+          $stage = New-Item -ItemType Directory -Path "stage" -Force
+          $bin   = New-Item -ItemType Directory -Path "stage/bin"
+          $lua   = New-Item -ItemType Directory -Path "stage/lua"
 
-          Write-Host "=== Setting up Environment ==="
+          # 1. Binaries
+          Copy-Item "${{ env.LUAJIT_BIN_DIR }}\bin\*" $bin
 
-          # 1. lua-ffi-bindings
-          # 直接从当前 checkout 的 vendor 目录复制
-          $ffiSource = "vendor/lua-ffi-bindings"
-          $ffiDest = Join-Path $envDir "ffi"
-          
-          robocopy $ffiSource $ffiDest /E /XD vendor /NFL /NDL /NJH /NJS
-          if ($LASTEXITCODE -ge 8) { throw "Robocopy ffi failed" }
-          $LASTEXITCODE = 0
+          # 2. Dependencies
 
-          # 2. luafilesystem (lfs_ffi.lua)
-          # [FIX] 使用本地 vendor 中的文件而非下载，确保版本一致性
-          # 如果 vendor/luafilesystem 存在则复制，否则回退到假设它在 sibling 目录(本地调试)
-          # 在 CI 中通常作为 submodule 或独立 repo checkout
-          $lfsDestDir = Join-Path $envDir "luafilesystem"
-          New-Item -ItemType Directory -Path $lfsDestDir -Force | Out-Null
-          
-          if (Test-Path "vendor/luafilesystem/lfs_ffi.lua") {
-              Copy-Item "vendor/luafilesystem/lfs_ffi.lua" $lfsDestDir
-          } elseif (Test-Path "../luafilesystem/lfs_ffi.lua") {
-              Copy-Item "../luafilesystem/lfs_ffi.lua" $lfsDestDir
+          # A. lua-ffi-bindings (Required by ext.math, ext.os, etc)
+          $ffiDest = New-Item -ItemType Directory -Path "$lua/ffi" -Force
+          if (Test-Path "vendor/lua-ffi-bindings") {
+             Copy-Item "vendor/lua-ffi-bindings/*" $ffiDest -Recurse -Exclude ".git"
           } else {
-              # Fallback: Download if not found locally (e.g. if submodule missing)
-              $lfsUrl = "https://raw.githubusercontent.com/daiaji/luafilesystem/main/lfs_ffi.lua"
-              Write-Host "Downloading lfs_ffi.lua..."
-              Invoke-WebRequest -Uri $lfsUrl -OutFile (Join-Path $lfsDestDir "lfs_ffi.lua")
+             Write-Warning "vendor/lua-ffi-bindings not found in submodule."
           }
 
-          # 3. LuaUnit
-          $luUrl = "https://raw.githubusercontent.com/bluebird75/luaunit/master/luaunit.lua"
-          Write-Host "Downloading luaunit.lua..."
-          Invoke-WebRequest -Uri $luUrl -OutFile (Join-Path $envDir "luaunit.lua")
+          # B. luafilesystem (lfs_ffi.lua for Windows support)
+          $lfsDest = New-Item -ItemType Directory -Path "$lua/luafilesystem" -Force
+          if (Test-Path "vendor/luafilesystem/lfs_ffi.lua") {
+              Copy-Item "vendor/luafilesystem/lfs_ffi.lua" $lfsDest
+          } else {
+              # Fallback download
+              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/daiaji/luafilesystem/main/lfs_ffi.lua" -OutFile "$lfsDest/lfs_ffi.lua"
+          }
 
-          # 4. Self (Lua-Ext)
-          # 复制自己到测试环境
-          $selfDest = Join-Path $envDir "ext"
-          robocopy . $selfDest /E /XD vendor .git .test_env .luajit_bin /NFL /NDL /NJH /NJS
-          if ($LASTEXITCODE -ge 8) { throw "Robocopy self failed" }
-          $LASTEXITCODE = 0
+          # C. LuaUnit
+          Invoke-WebRequest -Uri "https://raw.githubusercontent.com/bluebird75/luaunit/master/luaunit.lua" -OutFile "$lua/luaunit.lua"
+
+          # D. LuaJIT Libs (jit.*)
+          Copy-Item "${{ env.LUAJIT_BIN_DIR }}\jit" "$lua/jit" -Recurse
+
+          # 3. Target Library (lua-ext)
+          # lua-ext is flat in root, but expects to be required as 'ext.modname'.
+          # We need to structure it as:
+          #   stage/lua/ext.lua
+          #   stage/lua/ext/*.lua
+
+          $extDir = New-Item -ItemType Directory -Path "$lua/ext" -Force
+
+          # Copy all root lua files to stage/lua/ext/
+          Get-ChildItem -Path . -Filter "*.lua" -Exclude "setup.lua" | Copy-Item -Destination $extDir
+
+          # Move ext.lua to stage/lua/ext.lua so "require 'ext'" works
+          Move-Item "$extDir/ext.lua" "$lua/ext.lua" -Force
+
+          # Copy tests
+          $testDir = New-Item -ItemType Directory -Path "stage/tests" -Force
+          Copy-Item "tests/*" $testDir -Recurse
+
+          # Save Path
+          echo "TEST_STAGE=$($stage.FullName)" >> $env:GITHUB_ENV
 
       - name: Run Tests
         shell: pwsh
+        env:
+          # Setup paths to look into stage/lua
+          # ?.lua;?/init.lua pattern covers both stage/lua/ext.lua and stage/lua/ext/init.lua
+          LUA_PATH: ${{ env.TEST_STAGE }}\lua\?.lua;${{ env.TEST_STAGE }}\lua\?\init.lua;;
         run: |
-          $root = ($PWD.Path -replace "\\", "/")
-          
-          # 设置路径
-          $env:LUA_PATH = "$root/.test_env/?.lua;$root/.test_env/?/init.lua;$root/.test_env/luafilesystem/?.lua;;"
-          
-          Write-Host "Running Ext Tests..."
-          luajit tests/test_all.lua -v
+          Write-Host "Running tests in staged environment..."
+          & "${{ env.TEST_STAGE }}\bin\luajit.exe" "${{ env.TEST_STAGE }}\tests\test_all.lua" -v
