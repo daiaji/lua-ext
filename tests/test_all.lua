@@ -65,7 +65,7 @@ function TestCore:testOp_Logic()
     lu.assertTrue((false):or_(true))
     lu.assertTrue((true):xor(false))
     lu.assertFalse((true):xor(true))
-    lu.assertTrue((false):implies(true)) 
+    lu.assertTrue((false):implies(true))
     lu.assertFalse((true):implies(false))
 
     -- Safe Indexing
@@ -158,13 +158,13 @@ function TestCore:testCoroutineAssertResume()
 
     local co = coroutine.create(function() error("intended_fail") end)
     local ok, err = coroutine.assertresume(co)
-    
+
     io.stderr = old_stderr
 
     lu.assertFalse(ok)
     lu.assertStrContains(err, "intended_fail")
     lu.assertStrContains(err, "stack traceback")
-    
+
     local output = table.concat(captured)
     lu.assertStrContains(output, "intended_fail")
 end
@@ -236,10 +236,10 @@ function TestTable:testAdvancedFind()
 
     -- Insert Unique
     t:insertUnique({ id = 2 }, function(item, val) return item.id == val.id end)
-    lu.assertEquals(#t, 3) 
+    lu.assertEquals(#t, 3)
 
     t:insertUnique({ id = 4 }, function(item, val) return item.id == val.id end)
-    lu.assertEquals(#t, 4) 
+    lu.assertEquals(#t, 4)
 
     lu.assertTrue(t:contains(4, function(item, val) return item.id == val end))
 end
@@ -913,7 +913,7 @@ function TestCoverageGaps:testGCTable()
     end
     collectgarbage("collect")
     collectgarbage("collect")
-    
+
     if finalized_count == 0 then
         local _ = {}
         for i = 1, 1000 do _[i] = {} end
@@ -945,13 +945,15 @@ function TestCompat:testCompat_Math()
     local math = require 'ext.math'
     lu.assertNotNil(math.maxinteger)
     lu.assertNotNil(math.mininteger)
-    
+
     local i3 = math.tointeger(3)
     -- [Fix] Allow cdata result (int64) or number result
     -- LuaJIT FFI returns cdata<int64_t> which is numerically equal to 3 but fails strict type checks
     if type(i3) == 'cdata' then
         lu.assertTrue(i3 == 3, "math.tointeger(3) should equal 3")
-        lu.assertTrue(tostring(i3):find("LL") or tostring(i3):find("ULL"), "math.tointeger(3) should return int64 cdata")
+        -- [Fix] Explicitly check for nil to return boolean true, avoiding strict boolean check failure in LuaUnit
+        local is_int64 = (tostring(i3):find("LL") or tostring(i3):find("ULL")) ~= nil
+        lu.assertTrue(is_int64, "math.tointeger(3) should return int64 cdata")
     else
         lu.assertEquals(i3, 3)
     end
@@ -964,7 +966,7 @@ function TestCompat:testCompat_Math()
     end
 
     lu.assertNil(math.tointeger(3.1))
-    
+
     if ffi then
         lu.assertEquals(math.type(3), 'float')
         -- If tointeger returns cdata, check its type
@@ -988,7 +990,7 @@ end
 
 function TestCompat:testCompat_Struct()
     local string = require 'ext.string'
-    
+
     local fmt = "bhi" -- byte, short, int
     local packed = string.pack(fmt, 10, 2000, 300000)
     local size = string.packsize(fmt)
@@ -1011,7 +1013,7 @@ function TestCompat:testCompat_StringFormat()
     local t = { a = 1 }
     local res = string.format("%q", t)
     lu.assertStrContains(res, '"')
-    
+
     lu.assertEquals(string.format("%s", nil), "nil")
     lu.assertEquals(string.format("%s", true), "true")
 end
