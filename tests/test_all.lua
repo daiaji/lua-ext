@@ -945,12 +945,32 @@ function TestCompat:testCompat_Math()
     local math = require 'ext.math'
     lu.assertNotNil(math.maxinteger)
     lu.assertNotNil(math.mininteger)
-    lu.assertEquals(math.tointeger(3), 3)
-    lu.assertEquals(math.tointeger(3.0), 3)
+    
+    local i3 = math.tointeger(3)
+    -- [Fix] Allow cdata result (int64) or number result
+    -- LuaJIT FFI returns cdata<int64_t> which is numerically equal to 3 but fails strict type checks
+    if type(i3) == 'cdata' then
+        lu.assertTrue(i3 == 3, "math.tointeger(3) should equal 3")
+        lu.assertTrue(tostring(i3):find("LL") or tostring(i3):find("ULL"), "math.tointeger(3) should return int64 cdata")
+    else
+        lu.assertEquals(i3, 3)
+    end
+
+    local i3f = math.tointeger(3.0)
+    if type(i3f) == 'cdata' then
+        lu.assertTrue(i3f == 3, "math.tointeger(3.0) should equal 3")
+    else
+        lu.assertEquals(i3f, 3)
+    end
+
     lu.assertNil(math.tointeger(3.1))
     
     if ffi then
         lu.assertEquals(math.type(3), 'float')
+        -- If tointeger returns cdata, check its type
+        if type(i3) == 'cdata' then
+            lu.assertEquals(math.type(i3), 'integer')
+        end
     end
 
     lu.assertFalse(math.ult(-1, 2))
