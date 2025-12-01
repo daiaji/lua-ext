@@ -6,52 +6,45 @@
 -- 0. Bootstrap & Environment Setup
 -- ============================================================================
 local function bootstrap_paths()
-    -- Try to require 'ext' immediately. If it works (e.g. CI set LUA_PATH), we are done.
-    local ok, _ = pcall(require, 'ext')
-    if ok then return end
-
-    -- Clean up potential partial loads
+    -- Clean up any potential partial loads or CI pre-loads to ensure a fresh test environment
     if package.loaded['ext'] then package.loaded['ext'] = nil end
+    for k, _ in pairs(package.loaded) do
+        if type(k) == 'string' and k:match("^ext%.") then
+            package.loaded[k] = nil
+        end
+    end
 
-    local sep = package.config:sub(1, 1)
+    -- Determine script location to resolve relative paths
+    local info = debug.getinfo(1, "S")
+    local source = info.source:sub(2) -- remove '@'
+    local script_dir = source:match("(.*[/\\])") or "./"
+    
+    -- Define the standardized 'stage' layout roots relative to this script
+    -- Structure:
+    --   stage/tests/test_all.lua  <-- We are here
+    --   stage/lua/ext.lua
+    --   stage/lua/ext/
+    --   stage/lua/luafilesystem/lfs_ffi.lua
+    --   stage/lua/ffi/
+    
+    local lua_dir = script_dir .. "../lua"
+    
     local function add_path(p)
         if not package.path:find(p, 1, true) then
-            package.path = p .. sep .. "?.lua;" .. p .. sep .. "?" .. sep .. "init.lua;" .. package.path
+            package.path = package.path .. ";" .. p
         end
     end
 
-    -- Local Development Paths
-    add_path("..") -- Parent dir
-    add_path(".")  -- Current dir
-    add_path("vendor/lua-ffi-bindings")
-    add_path("../vendor/lua-ffi-bindings")
-    add_path("vendor/luafilesystem")
-    add_path("../vendor/luafilesystem")
-
-    -- Custom Loader: Handle flat structure in local dev (require "ext.assert" -> load "./assert.lua")
-    local function local_flat_loader(name)
-        if name:match("^ext%.") then
-            local sub = name:sub(5) -- remove 'ext.'
-            -- Security/Sanity check
-            if not sub:find("[/%\\]") then
-                local f = sub .. ".lua"
-                local fh = io.open(f, "r")
-                if fh then
-                    fh:close()
-                    -- check if file exists in current dir
-                    return assert(loadfile(f))
-                end
-                -- Try parent dir
-                local f_up = "../" .. sub .. ".lua"
-                fh = io.open(f_up, "r")
-                if fh then
-                    fh:close()
-                    return assert(loadfile(f_up))
-                end
-            end
-        end
-    end
-    table.insert(package.searchers or package.loaders, 2, local_flat_loader)
+    -- 1. Standard Module Lookup
+    add_path(lua_dir .. "/?.lua")
+    add_path(lua_dir .. "/?/init.lua")
+    
+    -- 2. Dependency Specific Lookups
+    -- Fix for lfs_ffi: it resides in 'luafilesystem' dir but is required as 'lfs_ffi'
+    add_path(lua_dir .. "/luafilesystem/?.lua")
+    -- Fix for ffi bindings: if they are required with 'ffi.' prefix, standard lookup handles it if folder is 'ffi'
+    -- If 'lua-ffi-bindings' logic requires looking into subdirs not covered by standard package.path:
+    add_path(lua_dir .. "/ffi/?.lua") 
 end
 bootstrap_paths()
 
@@ -66,9 +59,19 @@ local is_windows = (ffi.os == 'Windows')
 -- Load LuaUnit
 local lu_ok, lu = pcall(require, 'luaunit')
 if not lu_ok then
-    -- Fallback for local vendor structure
-    local ok, res = pcall(require, 'vendor.luaunit.luaunit')
-    if ok then lu = res else lu = require('luaunit') end
+    -- Fallback: try to find it in the lua dir if not in standard path
+    local lua_dir = package.path:match("([^;]+)%?%.lua") 
+    if lua_dir then
+        local path = lua_dir:gsub("%?", "luaunit") .. ".lua"
+        local chunk = loadfile(path)
+        if chunk then
+            lu = chunk()
+        else
+            error("Could not find luaunit. Please ensure luaunit.lua is in the lua path.")
+        end
+    else
+        error("Could not require 'luaunit'.")
+    end
 end
 
 -- ============================================================================
