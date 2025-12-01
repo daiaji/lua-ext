@@ -1,81 +1,32 @@
 -- lua-ext/tests/test_all.lua
 -- Ultimate Coverage Suite for lua-ext
--- Targets: 100% API Coverage including Meta, Polyfills, Edge Cases, IO/OS/Path (Windows/Unicode), Structs, Utils
+-- Targets: 100% API Coverage
 
 -- ============================================================================
--- 0. Bootstrap & Environment Setup
+-- 0. Environment Setup
 -- ============================================================================
-local function bootstrap_paths()
-    -- Clean up any potential partial loads or CI pre-loads to ensure a fresh test environment
-    if package.loaded['ext'] then package.loaded['ext'] = nil end
-    for k, _ in pairs(package.loaded) do
-        if type(k) == 'string' and k:match("^ext%.") then
-            package.loaded[k] = nil
-        end
-    end
-
-    -- Determine script location to resolve relative paths
-    local info = debug.getinfo(1, "S")
-    local source = info.source:sub(2) -- remove '@'
-    local script_dir = source:match("(.*[/\\])") or "./"
-    
-    -- Define the standardized 'stage' layout roots relative to this script
-    -- Structure:
-    --   stage/tests/test_all.lua  <-- We are here
-    --   stage/lua/ext.lua
-    --   stage/lua/ext/
-    --   stage/lua/luafilesystem/lfs_ffi.lua
-    --   stage/lua/ffi/
-    
-    local lua_dir = script_dir .. "../lua"
-    
-    local function add_path(p)
-        if not package.path:find(p, 1, true) then
-            package.path = package.path .. ";" .. p
-        end
-    end
-
-    -- 1. Standard Module Lookup
-    add_path(lua_dir .. "/?.lua")
-    add_path(lua_dir .. "/?/init.lua")
-    
-    -- 2. Dependency Specific Lookups
-    -- Fix for lfs_ffi: it resides in 'luafilesystem' dir but is required as 'lfs_ffi'
-    add_path(lua_dir .. "/luafilesystem/?.lua")
-    -- Fix for ffi bindings: if they are required with 'ffi.' prefix, standard lookup handles it if folder is 'ffi'
-    -- If 'lua-ffi-bindings' logic requires looking into subdirs not covered by standard package.path:
-    add_path(lua_dir .. "/ffi/?.lua") 
-end
-bootstrap_paths()
-
--- Force flush stdout for CI visibility
 io.stdout:setvbuf('no')
 io.stderr:setvbuf('no')
 
-require 'ext.ext' -- Load the full library
+-- 清理可能存在的预加载，确保测试的是纯净环境
+if package.loaded['ext'] then package.loaded['ext'] = nil end
+
+-- ============================================================================
+-- 1. Loading
+-- ============================================================================
+-- 此时 LUA_PATH 已经由 CI 设置好，所有依赖（lfs_ffi, ffi bindings, ext）都在路径中
+-- 直接 require 即可，不再需要 bootstrap 逻辑
+
+require 'ext' -- 加载库入口
+
 local ffi = require 'ffi'
 local is_windows = (ffi.os == 'Windows')
 
--- Load LuaUnit
-local lu_ok, lu = pcall(require, 'luaunit')
-if not lu_ok then
-    -- Fallback: try to find it in the lua dir if not in standard path
-    local lua_dir = package.path:match("([^;]+)%?%.lua") 
-    if lua_dir then
-        local path = lua_dir:gsub("%?", "luaunit") .. ".lua"
-        local chunk = loadfile(path)
-        if chunk then
-            lu = chunk()
-        else
-            error("Could not find luaunit. Please ensure luaunit.lua is in the lua path.")
-        end
-    else
-        error("Could not require 'luaunit'.")
-    end
-end
+-- 加载 LuaUnit
+local lu = require('luaunit')
 
 -- ============================================================================
--- 1. Core (Assert, Op, Meta, Tolua, Load, GC, Coroutine)
+-- 2. Core (Assert, Op, Meta, Tolua, Load, GC, Coroutine)
 -- ============================================================================
 TestCore = {}
 

@@ -54,11 +54,11 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           
-          # Debug: List root files
-          Write-Host "Listing repository root:"
-          Get-ChildItem -Path . | Select-Object Name
+          # === 扁平化目录结构 ===
+          # stage/bin/  -> luajit.exe
+          # stage/lua/  -> 存放所有库 (lua根目录)
+          # stage/tests/ -> 测试文件
           
-          # Create clean stage directory
           $stage = New-Item -ItemType Directory -Path "stage" -Force
           $bin   = New-Item -ItemType Directory -Path "$stage/bin"
           $lua   = New-Item -ItemType Directory -Path "$stage/lua"
@@ -67,9 +67,9 @@ jobs:
           # 1. Binaries
           Copy-Item "${{ env.LUAJIT_BIN_DIR }}\bin\*" $bin
           
-          # 2. Dependencies
+          # 2. Dependencies (直接放入 stage/lua)
           
-          # A. lua-ffi-bindings
+          # A. lua-ffi-bindings -> stage/lua/ffi/
           $ffiDest = New-Item -ItemType Directory -Path "$lua/ffi" -Force
           if (Test-Path "vendor/lua-ffi-bindings") {
              Copy-Item "vendor/lua-ffi-bindings/*" $ffiDest -Recurse -Exclude ".git"
@@ -77,45 +77,37 @@ jobs:
              Write-Warning "vendor/lua-ffi-bindings not found."
           }
 
-          # B. luafilesystem
-          $lfsDest = New-Item -ItemType Directory -Path "$lua/luafilesystem" -Force
+          # B. luafilesystem -> stage/lua/lfs_ffi.lua (直接放在根目录，不再套一层)
           if (Test-Path "vendor/luafilesystem/lfs_ffi.lua") {
-              Copy-Item "vendor/luafilesystem/lfs_ffi.lua" $lfsDest
+              Copy-Item "vendor/luafilesystem/lfs_ffi.lua" $lua
           } else {
               Write-Host "Downloading lfs_ffi.lua..."
-              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/daiaji/luafilesystem/main/lfs_ffi.lua" -OutFile "$lfsDest/lfs_ffi.lua"
+              Invoke-WebRequest -Uri "https://raw.githubusercontent.com/daiaji/luafilesystem/main/lfs_ffi.lua" -OutFile "$lua/lfs_ffi.lua"
           }
 
-          # C. LuaUnit
+          # C. LuaUnit -> stage/lua/luaunit.lua
           Write-Host "Downloading luaunit.lua..."
           Invoke-WebRequest -Uri "https://raw.githubusercontent.com/bluebird75/luaunit/master/luaunit.lua" -OutFile "$lua/luaunit.lua"
 
-          # D. LuaJIT Libs
+          # D. LuaJIT Libs (jit/*)
           Copy-Item "${{ env.LUAJIT_BIN_DIR }}\jit" "$lua/jit" -Recurse
 
           # 3. Target Library (lua-ext)
+          # 将源码复制到 stage/lua/ext/
           $extDir = New-Item -ItemType Directory -Path "$lua/ext" -Force
-          
-          # Copy all .lua files from root to stage/lua/ext/
-          # Using Copy-Item directly with wildcard
           Copy-Item ".\*.lua" -Destination $extDir -Force
           
-          # Verify copy happened
-          if (-not (Test-Path "$extDir\ext.lua")) {
-              Write-Error "Failed to copy ext.lua to $extDir. Is the repo structure flat?"
-              exit 1
-          }
-          
-          # Move ext.lua to stage/lua/ext.lua so "require 'ext'" works
+          # [关键一步] 将 ext.lua 提出来放到 stage/lua/ext.lua
+          # 这样 require 'ext' 就能找到它，而 ext.math 则会在 ext/math.lua 中找到
           $srcExtLua = Join-Path $extDir "ext.lua"
           $dstExtLua = Join-Path $lua "ext.lua"
-          Move-Item -Path $srcExtLua -Destination $dstExtLua -Force
+          if (Test-Path $srcExtLua) {
+              Move-Item -Path $srcExtLua -Destination $dstExtLua -Force
+          }
 
           # 4. Tests
           if (Test-Path "tests") {
               Copy-Item "tests\*" $tests -Recurse -Force
-          } else {
-              Write-Warning "tests directory not found in root"
           }
 
           # Save Path
@@ -124,8 +116,8 @@ jobs:
       - name: Run Tests
         shell: pwsh
         env:
-          # Path includes both the root lua dir (for ext.lua) and subdirs
+          # 目录结构现在是标准的，只需要指向 stage/lua 即可
           LUA_PATH: ${{ env.TEST_STAGE }}\lua\?.lua;${{ env.TEST_STAGE }}\lua\?\init.lua;;
         run: |
-          Write-Host "Running tests in staged environment..."
+          Write-Host "Running tests..."
           & "${{ env.TEST_STAGE }}\bin\luajit.exe" "${{ env.TEST_STAGE }}\tests\test_all.lua" -v
