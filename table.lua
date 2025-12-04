@@ -227,6 +227,20 @@ function table:findi(value, eq)
 	end
 end
 
+-- find element satisfying predicate f(value, key)
+function table:findIf(f)
+	for k,v in pairs(self) do
+		if f(v,k) then return k, v end
+	end
+end
+
+-- find element satisfying predicate f(value, key) using ipairs
+function table:findiIf(f)
+	for k,v in ipairs(self) do
+		if f(v,k) then return k, v end
+	end
+end
+
 -- should insertUnique only operate on the pairs() ?
 -- 	especially when insert() itself is an ipairs() operation
 function table:insertUnique(value, eq)
